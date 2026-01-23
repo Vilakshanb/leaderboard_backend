@@ -9,7 +9,7 @@ import pymongo
 from datetime import datetime
 
 # Setup Env
-os.environ["MongoDb-Connection-String"] = "mongodb+srv://Vilakshanb:TIW0YwgQNaI8iMSc@milestone.wftaulr.mongodb.net/PLI_Leaderboard?retryWrites=true&w=majority"
+os.environ["MONGODB_CONNECTION_STRING"] = "mongodb+srv://Vilakshanb:TIW0YwgQNaI8iMSc@milestone.wftaulr.mongodb.net/PLI_Leaderboard?retryWrites=true&w=majority"
 os.environ["PLI_DB_NAME"] = "PLI_Leaderboard_v2"
 
 # Mock Azure Functions

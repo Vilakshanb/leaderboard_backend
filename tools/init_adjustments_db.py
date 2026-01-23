@@ -5,7 +5,7 @@ import pymongo
 from pymongo import MongoClient, ASCENDING, DESCENDING
 
 def init_db():
-    mongo_uri = os.getenv("MongoDb-Connection-String") or os.getenv("MONGODB_URI")
+    mongo_uri = os.getenv("MONGODB_CONNECTION_STRING") or os.getenv("MONGODB_URI")
     db_name = os.getenv("PLI_DB_NAME", "PLI_Leaderboard")
 
     if not mongo_uri:

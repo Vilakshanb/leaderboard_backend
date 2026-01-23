@@ -58,7 +58,7 @@ KV_SECRET_ZOHO_CLIENT_SECRET = os.getenv(
 KV_SECRET_ZOHO_REFRESH_TOKEN = os.getenv(
     "KV_SECRET_ZOHO_REFRESH_TOKEN", "Zoho-refresh-token-vilakshan-account"
 )
-KV_SECRET_MONGO_CONNSTRING = os.getenv("KV_SECRET_MONGO_CONNSTRING", "MongoDb-Connection-String")
+KV_SECRET_MONGO_CONNSTRING = os.getenv("KV_SECRET_MONGO_CONNSTRING", "MONGODB_CONNECTION_STRING")
 
 
 # Effective RM-name skip set: aliases
@@ -116,7 +116,7 @@ def get_secret(name: str, default: str | None = None) -> str | None:
         return os.environ[name]
 
     # Back-compat alias: if code asks for the KV key but env only provides legacy name
-    if name == "MongoDb-Connection-String":
+    if name == "MONGODB_CONNECTION_STRING":
         legacy = os.getenv("MONGO_CONN")
         if legacy:
             return legacy

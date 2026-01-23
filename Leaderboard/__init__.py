@@ -138,7 +138,7 @@ def get_secret(name: str, default: str | None = None) -> str | None:
         return os.environ[name]
 
     # Back-compat alias: if code asks for the KV key but env only provides legacy name(s)
-    if name == "MongoDb-Connection-String":
+    if name == "MONGODB_CONNECTION_STRING":
         legacy = os.getenv("MONGO_CONN") or os.getenv("MONGO_URI") or os.getenv("MONGODB_URI")
         if legacy:
             return legacy
@@ -183,7 +183,7 @@ def get_secret(name: str, default: str | None = None) -> str | None:
 DB_NAME = os.getenv("PLI_DB_NAME") or os.getenv("MONGO_DB_NAME") or "PLI_Leaderboard_v2"
 
 MONGO_URI = (
-    get_secret("MongoDb-Connection-String")
+    get_secret("MONGODB_CONNECTION_STRING")
     or os.getenv("MONGO_CONN")
     or os.getenv("MONGO_URI")
     or os.getenv("MONGODB_URI")

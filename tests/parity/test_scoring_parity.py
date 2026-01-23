@@ -29,7 +29,7 @@ def run_all_scenarios(tmp_path_factory):
     env = os.environ.copy()
     env["PYTHONPATH"] = ROOT_DIR
     env["CONFIRM_DROP"] = "yes"
-    if not env.get("MongoDb-Connection-String") and not env.get("MONGO_URI"):
+    if not env.get("MONGODB_CONNECTION_STRING") and not env.get("MONGO_URI"):
         pytest.skip("MONGO_URI or MongoDb-Connection-String required")
 
     print(f"\n[Fixture] Running scoring pipelines into {out_base}...")

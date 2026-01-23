@@ -9,7 +9,7 @@ def main(mytimer: func.TimerRequest) -> None:
     utc_timestamp = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat()
     logging.info(f"Forecast Compute triggering at {utc_timestamp}")
 
-    uri = os.getenv("MongoDb-Connection-String")
+    uri = os.getenv("MONGODB_CONNECTION_STRING")
     client = pymongo.MongoClient(uri)
     db_name = os.getenv("PLI_DB_NAME", "PLI_Leaderboard")
     db = client[db_name]

@@ -2,7 +2,7 @@
 import os
 from pymongo import MongoClient
 
-MONGO_URI = os.getenv("MongoDb-Connection-String") or os.getenv("MONGO_URI")
+MONGO_URI = os.getenv("MONGODB_CONNECTION_STRING") or os.getenv("MONGO_URI")
 DB_NAME = os.getenv("DB_NAME", "PLI_Leaderboard_v2")
 
 client = MongoClient(MONGO_URI)

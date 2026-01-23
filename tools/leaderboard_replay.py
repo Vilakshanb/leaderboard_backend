@@ -172,7 +172,7 @@ def run_scorers(months, replay_lb_db, replay_core_db):
     # We implement the same mock as before but pointing to replay_lb_db["Insurance_Leads"]
 
 def main():
-    mongo_uri = os.getenv("MongoDb-Connection-String")
+    mongo_uri = os.getenv("MONGODB_CONNECTION_STRING")
     if not mongo_uri:
         logger.error("Mongo URI missing")
         sys.exit(1)

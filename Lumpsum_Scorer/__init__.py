@@ -2462,7 +2462,7 @@ _AUM_CACHE: dict[str, float] = {}
 
 # Key Vault URL and Mongo secret names can be configured via env
 KEY_VAULT_URL = os.getenv("KEY_VAULT_URL", "https://milestonetsl1.vault.azure.net/")
-MONGODB_SECRET_NAME = os.getenv("MONGODB_SECRET_NAME", "MongoDb-Connection-String")
+MONGODB_SECRET_NAME = os.getenv("MONGODB_SECRET_NAME", "MONGODB_CONNECTION_STRING")
 LEADERBOARD_DB_NAME = os.getenv("LEADERBOARD_DB_NAME", "PLI_Leaderboard")
 
 
@@ -2477,7 +2477,7 @@ def get_secret(name: str, default: str | None = None) -> str | None:
         return os.environ[name]
 
     # Back-compat alias: if code asks for the KV key but env only provides legacy name(s)
-    if name == "MongoDb-Connection-String":
+    if name == "MONGODB_CONNECTION_STRING":
         legacy = os.getenv("MONGO_CONN") or os.getenv("MONGO_URI") or os.getenv("MONGODB_URI")
         if legacy:
             return legacy
@@ -2882,7 +2882,7 @@ def run_net_purchase(
         # If not passed, create one (e.g. CLI or Timer run without passing client)
         # Note: If running in Azure Function, we might want to reuse if possible.
         # But for CLI entry points, we create here.
-        uri = os.getenv("MongoDb-Connection-String") or os.getenv("MONGO_URI")
+        uri = os.getenv("MONGODB_CONNECTION_STRING") or os.getenv("MONGO_URI")
         client_to_use = pymongo.MongoClient(uri)
 
     db = client_to_use[core_db_name]

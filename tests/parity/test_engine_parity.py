@@ -28,20 +28,20 @@ def parity_env(tmp_path_factory):
     ts_out.mkdir()
 
     # Pass connection string
-    mongo_uri = os.environ.get("MONGO_URI") or os.environ.get("MongoDb-Connection-String")
+    mongo_uri = os.environ.get("MONGO_URI") or os.environ.get("MONGODB_CONNECTION_STRING")
     if not mongo_uri:
         # Try to read local.settings.json fallback
         try:
             settings_path = os.path.join(ROOT_DIR, "local.settings.json")
             with open(settings_path, "r") as f:
                 settings = json.load(f)
-                mongo_uri = settings["Values"]["MongoDb-Connection-String"]
+                mongo_uri = settings["Values"]["MONGODB_CONNECTION_STRING"]
         except Exception:
             pytest.skip("MONGO_URI not found and local.settings.json unavailable")
 
     env = os.environ.copy()
     env["MONGO_URI"] = mongo_uri
-    env["MongoDb-Connection-String"] = mongo_uri
+    env["MONGODB_CONNECTION_STRING"] = mongo_uri
     env["CONFIRM_DROP"] = "yes"
     env["SNAPSHOT_DIR"] = str(ts_out)
 

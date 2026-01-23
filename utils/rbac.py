@@ -9,7 +9,7 @@ import pymongo
 
 def _get_db():
     try:
-        uri = os.getenv("MongoDb-Connection-String")
+        uri = os.getenv("MONGODB_CONNECTION_STRING")
         if not uri: return None
         client = pymongo.MongoClient(uri)
         return client["PLI_Leaderboard"]

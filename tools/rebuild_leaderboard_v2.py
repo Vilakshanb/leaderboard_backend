@@ -52,7 +52,7 @@ def get_month_range(year, month):
 
 def wipe_leadboard_v2():
     print(f"WARNING: Wiping {DB_NAME} Leaderboard collections...")
-    conn = os.getenv("MongoDb-Connection-String") or os.getenv("MONGO_URI") # fallback
+    conn = os.getenv("MONGODB_CONNECTION_STRING") or os.getenv("MONGO_URI") # fallback
     if not conn:
         print("No Mongo connection string found!")
         sys.exit(1)
@@ -88,7 +88,7 @@ def run_rebuild():
         # 2. SIP
         print(f"  [SIP] Running for {target_month_str}...")
         try:
-            run_pipeline(start_date=start_dt, end_date=end_dt, mongo_uri=os.getenv("MongoDb-Connection-String"))
+            run_pipeline(start_date=start_dt, end_date=end_dt, mongo_uri=os.getenv("MONGODB_CONNECTION_STRING"))
         except Exception as e:
             print(f"  [SIP] Error: {e}")
 

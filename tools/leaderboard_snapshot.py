@@ -112,7 +112,7 @@ def main():
             print(f"FATAL: Snapshotting PROD requires env {allow_var}=true")
             sys.exit(1)
 
-    mongo_uri = os.getenv("MongoDb-Connection-String") or os.getenv("MONGODB_URI")
+    mongo_uri = os.getenv("MONGODB_CONNECTION_STRING") or os.getenv("MONGODB_URI")
     if not mongo_uri:
         print("Error: MongoDb-Connection-String not found")
         sys.exit(1)

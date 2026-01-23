@@ -39,7 +39,7 @@ except Exception as e:
     SCHEMA_VERSION_SIP = "unknown"
 
 # --- Constants & Config ---
-MONGO_URI = os.getenv("MongoDb-Connection-String")
+MONGO_URI = os.getenv("MONGODB_CONNECTION_STRING")
 DB_NAME = os.getenv("DB_NAME", "PLI_Leaderboard")
 APP_ENV = os.getenv("APP_ENV", "dev")
 

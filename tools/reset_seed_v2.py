@@ -21,7 +21,7 @@ from pymongo import MongoClient
 # Safety check
 DB_NAME = "PLI_Leaderboard_v2"
 def seed_data():
-    MONGO_URI = os.getenv("MongoDb-Connection-String") or os.getenv("MONGO_URI")
+    MONGO_URI = os.getenv("MONGODB_CONNECTION_STRING") or os.getenv("MONGO_URI")
 
     if not MONGO_URI:
         print("ERROR: MongoDb-Connection-String env var not set")

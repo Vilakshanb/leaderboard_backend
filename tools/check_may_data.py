@@ -4,7 +4,7 @@ import pymongo
 
 def check_may_data():
     try:
-        # client = pymongo.MongoClient(os.getenv("MongoDb-Connection-String"))
+        # client = pymongo.MongoClient(os.getenv("MONGODB_CONNECTION_STRING"))
         client = pymongo.MongoClient("mongodb+srv://Vilakshanb:TIW0YwgQNaI8iMSc@milestone.wftaulr.mongodb.net/?retryWrites=true&w=majority")
         db = client["PLI_Leaderboard_v2"]
 

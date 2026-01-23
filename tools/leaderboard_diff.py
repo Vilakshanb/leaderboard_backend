@@ -79,7 +79,7 @@ def get_pk(doc, pk_fields):
     return "|".join(vals)
 
 def main():
-    mongo_uri = os.getenv("MongoDb-Connection-String")
+    mongo_uri = os.getenv("MONGODB_CONNECTION_STRING")
     replay_db = os.environ.get(CONFIG["replay"]["replay_db_name_env"], "PLI_Leaderboard_TEST")
     baseline_dir = CONFIG["snapshot"]["baseline_dir"]
 

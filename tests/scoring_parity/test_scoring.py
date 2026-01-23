@@ -11,7 +11,7 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 sys.path.append(ROOT_DIR)
 
 # Verify Env
-MONGO_URI_ENV = os.getenv("MongoDb-Connection-String") or os.getenv("MONGO_URI")
+MONGO_URI_ENV = os.getenv("MONGODB_CONNECTION_STRING") or os.getenv("MONGO_URI")
 if not MONGO_URI_ENV:
     pytest.skip("Skipping scoring parity tests: Env var MongoDb-Connection-String not set", allow_module_level=True)
 
@@ -38,7 +38,7 @@ def test_scoring_parity_e2e(tmp_path):
 
     # Prepare complete environment
     env = os.environ.copy()
-    env["MongoDb-Connection-String"] = MONGO_URI_ENV
+    env["MONGODB_CONNECTION_STRING"] = MONGO_URI_ENV
     env["CONFIRM_DROP"] = "yes"
     env["PYTHONPATH"] = ROOT_DIR
 

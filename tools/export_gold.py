@@ -20,7 +20,7 @@ import reset_seed_v2
 
 # Database Constants
 TEST_DB_NAME = "PLI_Leaderboard_v2"
-MONGO_URI = os.getenv("MongoDb-Connection-String") or os.getenv("MONGO_URI")
+MONGO_URI = os.getenv("MONGODB_CONNECTION_STRING") or os.getenv("MONGO_URI")
 
 if not MONGO_URI:
     print("ERROR: MongoDb-Connection-String or MONGO_URI env var not set")

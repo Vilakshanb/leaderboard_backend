@@ -356,7 +356,7 @@ KV_SECRET_ZOHO_CLIENT_SECRET = os.getenv(
 KV_SECRET_ZOHO_REFRESH_TOKEN = os.getenv(
     "KV_SECRET_ZOHO_REFRESH_TOKEN", "Zoho-refresh-token-vilakshan-account"
 )
-KV_SECRET_MONGO_CONNSTRING = os.getenv("KV_SECRET_MONGO_CONNSTRING", "MongoDb-Connection-String")
+KV_SECRET_MONGO_CONNSTRING = os.getenv("KV_SECRET_MONGO_CONNSTRING", "MONGODB_CONNECTION_STRING")
 
 
 # --- Mongo target database (override with env MONGO_DB_NAME) ---
@@ -686,7 +686,7 @@ def get_secret(name: str, default: str | None = None) -> str | None:
         return os.environ[name]
 
     # Back-compat alias: if code asks for the KV key but env only provides legacy name
-    if name == "MongoDb-Connection-String":
+    if name == "MONGODB_CONNECTION_STRING":
         legacy = os.getenv("MONGO_CONN")
         if legacy:
             return legacy
@@ -754,7 +754,7 @@ def connect_to_mongo(collection_name, db_name: str | None = None):
             collection_name,
         )
         return _NullCollection()
-    mongo_uri = get_secret("MongoDb-Connection-String")
+    mongo_uri = get_secret("MONGODB_CONNECTION_STRING")
     if not mongo_uri:
         logging.error("MongoDB CONNECTIONSTRING not loaded from Key Vault.")
         return None

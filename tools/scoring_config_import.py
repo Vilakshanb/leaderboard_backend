@@ -20,7 +20,7 @@ def load_settings():
 
 def get_db():
     settings = load_settings()
-    uri = os.getenv("MongoDb-Connection-String") or settings.get("MongoDb-Connection-String")
+    uri = os.getenv("MONGODB_CONNECTION_STRING") or settings.get("MONGODB_CONNECTION_STRING")
     db_name = os.getenv("DB_NAME") or settings.get("DB_NAME") or "PLI_Leaderboard"
     if not uri:
         logging.error("No connection string found.")

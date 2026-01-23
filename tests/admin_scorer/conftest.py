@@ -41,7 +41,7 @@ def api_base_url():
 @pytest.fixture(scope="session")
 def mongo_client():
     """MongoDB client for test database."""
-    mongo_uri = os.getenv("MongoDb-Connection-String")
+    mongo_uri = os.getenv("MONGODB_CONNECTION_STRING")
     if not mongo_uri:
         pytest.skip("MongoDb-Connection-String not set")
 

@@ -76,7 +76,7 @@ def get_secret(name: str, default: str | None = None) -> str | None:
         return os.environ[name]
 
     # Back-compat alias: if code asks for the KV key but env only provides legacy name
-    if name == "MongoDb-Connection-String":
+    if name == "MONGODB_CONNECTION_STRING":
         legacy = os.getenv("MONGO_CONN")
         if legacy:
             return legacy
@@ -139,7 +139,7 @@ def get_mongo_client() -> Tuple[Optional[MongoClientType], Optional[MongoDatabas
     if _MONGO_CLIENT is not None and _MONGO_DB is not None:
         return _MONGO_CLIENT, _MONGO_DB
 
-    mongo_uri = get_secret("MongoDb-Connection-String")
+    mongo_uri = get_secret("MONGODB_CONNECTION_STRING")
     if not mongo_uri:
         if not _MONGO_WARNED_MISSING:
             logger.error(
@@ -1137,7 +1137,7 @@ def run_pipeline(from_date_str: str, to_date_str: str, cookies=None):
     print(f"Fetching data: {from_date_str} to {to_date_str}")
 
     # One-time hint if Mongo isn’t configured
-    if get_secret("MongoDb-Connection-String") in (None, ""):
+    if get_secret("MONGODB_CONNECTION_STRING") in (None, ""):
         print(
             "Mongo not configured. Set ENV 'MongoDb-Connection-String' or store it in Azure Key Vault.\n"
             "   Example (env): export MongoDb-Connection-String='mongodb+srv://user:pass@milestone.wftaulr.mongodb.net/?retryWrites=true&w=majority&appName=Milestone'\n"

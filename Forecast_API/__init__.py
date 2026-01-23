@@ -21,7 +21,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse("Not Found", status_code=404)
 
 def get_db():
-    uri = os.getenv("MongoDb-Connection-String")
+    uri = os.getenv("MONGODB_CONNECTION_STRING")
     client = pymongo.MongoClient(uri)
     db_name = os.getenv("PLI_DB_NAME", "PLI_Leaderboard")
     return client[db_name]

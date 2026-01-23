@@ -28,7 +28,7 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 sys.path.append(ROOT_DIR)
 
 # Safety Check
-MONGO_URI = os.getenv("MongoDb-Connection-String") or os.getenv("MONGO_URI")
+MONGO_URI = os.getenv("MONGODB_CONNECTION_STRING") or os.getenv("MONGO_URI")
 if not MONGO_URI:
     print("ERROR: MongoDb-Connection-String or MONGO_URI must be set")
     sys.exit(1)

@@ -42,7 +42,7 @@ def get_secret(name: str):
         return None
 
 def main():
-    conn_str = get_secret("MongoDb-Connection-String")
+    conn_str = get_secret("MONGODB_CONNECTION_STRING")
     if not conn_str:
         logging.error("Could not find MongoDb-Connection-String")
         return

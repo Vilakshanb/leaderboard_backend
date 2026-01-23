@@ -10,7 +10,7 @@ from bson import json_util, ObjectId
 from datetime import datetime
 
 # --- Configuration ---
-MONGO_URI = os.getenv("MongoDb-Connection-String")
+MONGO_URI = os.getenv("MONGODB_CONNECTION_STRING")
 DB_NAME = "PLI_Leaderboard"
 
 # Collections
@@ -696,7 +696,7 @@ except ImportError:
 
 import Leaderboard
 
-mongo_uri = os.environ.get("MongoDb-Connection-String")
+mongo_uri = os.environ.get("MONGODB_CONNECTION_STRING")
 client = pymongo.MongoClient(mongo_uri)
 # Explicitly use V2 DB
 db = client["PLI_Leaderboard_v2"]
@@ -717,7 +717,7 @@ Leaderboard.run("{month}")
             env = os.environ.copy()
             env["SUPPRESS_ENV_WARNING"] = "1"
             # Pass MongoDB connection from Azure Functions environment to subprocess
-            mongo_key = "MongoDb-Connection-String"
+            mongo_key = "MONGODB_CONNECTION_STRING"
             if mongo_key not in env and MONGO_URI:
                 env[mongo_key] = MONGO_URI
             # Ensure scorer and Leaderboard aggregator use V2 database (not V1)

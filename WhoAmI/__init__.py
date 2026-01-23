@@ -28,7 +28,7 @@ def is_admin_inline(email: str) -> bool:
 
     # 2. Check DB
     try:
-        uri = os.getenv("MongoDb-Connection-String")
+        uri = os.getenv("MONGODB_CONNECTION_STRING")
         if uri:
             client = pymongo.MongoClient(uri)
             db = client["PLI_Leaderboard"]

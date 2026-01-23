@@ -46,7 +46,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json"
         )
     elif subpath == "debug":
-        uri = os.getenv("MongoDb-Connection-String")
+        uri = os.getenv("MONGODB_CONNECTION_STRING")
         db_name = os.getenv("PLI_DB_NAME", os.getenv("DB_NAME", "PLI_Leaderboard"))
         # Mask URI
         masked_uri = uri.split("@")[1] if "@" in uri else "Hidden"
@@ -59,7 +59,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse("Not Found", status_code=404)
 
 def get_db():
-    uri = os.getenv("MongoDb-Connection-String")
+    uri = os.getenv("MONGODB_CONNECTION_STRING")
     client = pymongo.MongoClient(uri)
     db_name = os.getenv("PLI_DB_NAME", os.getenv("DB_NAME", "PLI_Leaderboard_v2"))
     return client[db_name]
@@ -455,7 +455,7 @@ def fetch_user_breakdown(req, eid):
                 # Connect to V2 DB for config
                 v2_db_name = os.getenv("PLI_DB_NAME", "PLI_Leaderboard_v2")
                 # Reuse UR from get_db() context or environment
-                mongo_uri = os.getenv("MongoDb-Connection-String")
+                mongo_uri = os.getenv("MONGODB_CONNECTION_STRING")
                 client_v2 = pymongo.MongoClient(mongo_uri)
                 db_v2 = client_v2[v2_db_name]
                 config_doc = db_v2.config.find_one({"_id": "Leaderboard_SIP"})

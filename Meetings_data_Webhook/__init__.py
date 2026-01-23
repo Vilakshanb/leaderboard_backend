@@ -71,7 +71,7 @@ def get_secret(name: str, default: str | None = None) -> str | None:
         return env_val
 
     # Back-compat aliases if caller asked for the canonical KV key but env has legacy names
-    if name == "MongoDb-Connection-String":
+    if name == "MONGODB_CONNECTION_STRING":
         legacy = os.getenv("MONGO_CONN") or os.getenv("MONGO_URI") or os.getenv("MONGODB_URI")
         if legacy:
             _SECRET_CACHE[name] = legacy
@@ -81,7 +81,7 @@ def get_secret(name: str, default: str | None = None) -> str | None:
     return default
 
 
-mongo_uri = get_secret("MongoDb-Connection-String")
+mongo_uri = get_secret("MONGODB_CONNECTION_STRING")
 client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
 
 

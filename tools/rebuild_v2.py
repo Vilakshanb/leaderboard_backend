@@ -18,7 +18,7 @@ os.environ["APP_ENV"] = "Production"
 
 # Connect
 CONN = "mongodb+srv://Vilakshanb:TIW0YwgQNaI8iMSc@milestone.wftaulr.mongodb.net/?retryWrites=true&w=majority"
-os.environ["MongoDb-Connection-String"] = CONN
+os.environ["MONGODB_CONNECTION_STRING"] = CONN
 os.environ["MONGO_URI"] = CONN # Fallback for some modules
 
 client = MongoClient(CONN)
