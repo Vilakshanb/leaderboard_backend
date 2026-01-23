@@ -1,0 +1,336 @@
+[
+  {
+    "Metric": "Lumpsum",
+    "employee_id": "EMP001",
+    "month": "2025-11",
+    "AUM (Start of Month)": 60000000.0,
+    "Audit": {
+      "ByType": [
+        {
+          "type": "Purchase",
+          "sum": 15000000.0
+        },
+        {
+          "type": "Redemption",
+          "sum": 0.0
+        },
+        {
+          "type": "Switch In",
+          "sum": 0.0
+        },
+        {
+          "type": "Switch Out",
+          "sum": 0.0
+        },
+        {
+          "type": "COB In",
+          "sum": 0.0
+        },
+        {
+          "type": "COB Out",
+          "sum": 0.0
+        }
+      ],
+      "ByCategory": []
+    },
+    "Breakdown": {
+      "Additions": {
+        "Total Purchase (100%)": 15000000.0,
+        "Switch In (100%)": 0.0,
+        "Debt Purchase Bonus (+20% if <75%)": 0.0,
+        "Blacklisted & Liquid Purchase (0%)": 0.0,
+        "Change Of Broker In - TICOB (50%)": 0.0,
+        "Switch In (120%)": 0.0
+      },
+      "Subtractions": {
+        "Redemption (100%)": 0.0,
+        "Switch Out (100%)": 0.0,
+        "Change Of Broker Out - TOCOB (120%)": 0.0,
+        "Switch Out (120%)": 0.0
+      },
+      "Totals": {
+        "Total Additions": 15000000.0,
+        "Total Subtractions": 0.0,
+        "Net Purchase (Formula)": 15000000.0
+      }
+    },
+    "BreakdownMTD": {
+      "Additions": {
+        "Total Purchase (100%)": 15000000.0,
+        "Switch In (100%)": 0.0,
+        "Debt Purchase Bonus (+20% if <75%)": 0.0,
+        "Blacklisted & Liquid Purchase (0%)": 0.0,
+        "Change Of Broker In - TICOB (50%)": 0.0,
+        "Switch In (120%)": 0.0
+      },
+      "Subtractions": {
+        "Redemption (100%)": 0.0,
+        "Switch Out (100%)": 0.0,
+        "Change Of Broker Out - TOCOB (120%)": 0.0,
+        "Switch Out (120%)": 0.0
+      },
+      "Totals": {
+        "Total Additions": 15000000.0,
+        "Total Subtractions": 0.0,
+        "Net Purchase (Formula)": 15000000.0
+      }
+    },
+    "NetPurchase": 15000000.0,
+    "SchemaVersion": "2025-11-15.r1",
+    "annual_trail_rate": 0.8,
+    "base_incentive": 60.0,
+    "config_meta": {
+      "range_mode": "last5",
+      "fy_mode": "FY_APR",
+      "periodic_bonus_enable": false,
+      "periodic_bonus_apply": true
+    },
+    "config_schema_version": "2025-11-15.r1",
+    "employee_alias": "Test Employee One",
+    "employee_name": "TEST EMPLOYEE ONE",
+    "final_incentive": 60.0,
+    "growth_band": "\u22652%",
+    "growth_pct": 25.0,
+    "incentive_penalty_meta": {
+      "penalty_rupees_raw": 0.0,
+      "penalty_rupees_applied": 0.0,
+      "band1_trail_pct": 0.5,
+      "band1_cap_rupees": 5000.0,
+      "band2_rupees": 2500.0,
+      "ls_penalty_strategy": "growth_slab_v1",
+      "np_val": 15000000.0
+    },
+    "is_active": true,
+    "meetings_count": 0,
+    "meetings_multiplier": 1.0,
+    "meetings_slab": "0\u20135",
+    "monthly_trail_used": 40000.0,
+    "net_purchase": 15000000.0,
+    "positive_np_streak": 1,
+    "rate_used": 0.0,
+    "streak_bonus_rupees": 0.0
+  },
+  {
+    "month": "2025-11",
+    "employee_id": "EMP002",
+    "Metric": "Lumpsum",
+    "AUM (Start of Month)": 100000000.0,
+    "Audit": {
+      "ByType": [
+        {
+          "type": "Purchase",
+          "sum": 10000.0
+        },
+        {
+          "type": "Redemption",
+          "sum": 0.0
+        },
+        {
+          "type": "Switch In",
+          "sum": 0.0
+        },
+        {
+          "type": "Switch Out",
+          "sum": 0.0
+        },
+        {
+          "type": "COB In",
+          "sum": 0.0
+        },
+        {
+          "type": "COB Out",
+          "sum": 0.0
+        }
+      ],
+      "ByCategory": []
+    },
+    "Breakdown": {
+      "Additions": {
+        "Total Purchase (100%)": 10000.0,
+        "Switch In (100%)": 0.0,
+        "Debt Purchase Bonus (+20% if <75%)": 0.0,
+        "Blacklisted & Liquid Purchase (0%)": 0.0,
+        "Change Of Broker In - TICOB (50%)": 0.0,
+        "Switch In (120%)": 0.0
+      },
+      "Subtractions": {
+        "Redemption (100%)": 0.0,
+        "Switch Out (100%)": 0.0,
+        "Change Of Broker Out - TOCOB (120%)": 0.0,
+        "Switch Out (120%)": 0.0
+      },
+      "Totals": {
+        "Total Additions": 10000.0,
+        "Total Subtractions": 0.0,
+        "Net Purchase (Formula)": 10000.0
+      }
+    },
+    "BreakdownMTD": {
+      "Additions": {
+        "Total Purchase (100%)": 10000.0,
+        "Switch In (100%)": 0.0,
+        "Debt Purchase Bonus (+20% if <75%)": 0.0,
+        "Blacklisted & Liquid Purchase (0%)": 0.0,
+        "Change Of Broker In - TICOB (50%)": 0.0,
+        "Switch In (120%)": 0.0
+      },
+      "Subtractions": {
+        "Redemption (100%)": 0.0,
+        "Switch Out (100%)": 0.0,
+        "Change Of Broker Out - TOCOB (120%)": 0.0,
+        "Switch Out (120%)": 0.0
+      },
+      "Totals": {
+        "Total Additions": 10000.0,
+        "Total Subtractions": 0.0,
+        "Net Purchase (Formula)": 10000.0
+      }
+    },
+    "NetPurchase": 10000.0,
+    "SchemaVersion": "2025-11-15.r1",
+    "annual_trail_rate": 0.8,
+    "base_incentive": 40.0,
+    "config_meta": {
+      "range_mode": "last5",
+      "fy_mode": "FY_APR",
+      "periodic_bonus_enable": false,
+      "periodic_bonus_apply": true
+    },
+    "config_schema_version": "2025-11-15.r1",
+    "employee_alias": "Test Employee Two",
+    "employee_name": "TEST EMPLOYEE TWO",
+    "final_incentive": 40.0,
+    "growth_band": "0\u2013<0.25%",
+    "growth_pct": 0.01,
+    "incentive_penalty_meta": {
+      "penalty_rupees_raw": 0.0,
+      "penalty_rupees_applied": 0.0,
+      "band1_trail_pct": 0.5,
+      "band1_cap_rupees": 5000.0,
+      "band2_rupees": 2500.0,
+      "ls_penalty_strategy": "growth_slab_v1",
+      "np_val": 10000.0
+    },
+    "is_active": true,
+    "meetings_count": 0,
+    "meetings_multiplier": 1.0,
+    "meetings_slab": "0\u20135",
+    "monthly_trail_used": 66666.67,
+    "net_purchase": 10000.0,
+    "positive_np_streak": 1,
+    "rate_used": 0.0,
+    "streak_bonus_rupees": 0.0
+  },
+  {
+    "month": "2025-11",
+    "employee_id": "EMPGATE",
+    "Metric": "Lumpsum",
+    "AUM (Start of Month)": 5000000.0,
+    "Audit": {
+      "ByType": [
+        {
+          "type": "Purchase",
+          "sum": 0.0
+        },
+        {
+          "type": "Redemption",
+          "sum": 500000.0
+        },
+        {
+          "type": "Switch In",
+          "sum": 0.0
+        },
+        {
+          "type": "Switch Out",
+          "sum": 0.0
+        },
+        {
+          "type": "COB In",
+          "sum": 0.0
+        },
+        {
+          "type": "COB Out",
+          "sum": 0.0
+        }
+      ],
+      "ByCategory": []
+    },
+    "Breakdown": {
+      "Additions": {
+        "Total Purchase (100%)": 0.0,
+        "Switch In (100%)": 0.0,
+        "Debt Purchase Bonus (+20% if <75%)": 0.0,
+        "Blacklisted & Liquid Purchase (0%)": 0.0,
+        "Change Of Broker In - TICOB (50%)": 0.0,
+        "Switch In (120%)": 0.0
+      },
+      "Subtractions": {
+        "Redemption (100%)": 500000.0,
+        "Switch Out (100%)": 0.0,
+        "Change Of Broker Out - TOCOB (120%)": 0.0,
+        "Switch Out (120%)": 0.0
+      },
+      "Totals": {
+        "Total Additions": 0.0,
+        "Total Subtractions": 500000.0,
+        "Net Purchase (Formula)": -500000.0
+      }
+    },
+    "BreakdownMTD": {
+      "Additions": {
+        "Total Purchase (100%)": 0.0,
+        "Switch In (100%)": 0.0,
+        "Debt Purchase Bonus (+20% if <75%)": 0.0,
+        "Blacklisted & Liquid Purchase (0%)": 0.0,
+        "Change Of Broker In - TICOB (50%)": 0.0,
+        "Switch In (120%)": 0.0
+      },
+      "Subtractions": {
+        "Redemption (100%)": 500000.0,
+        "Switch Out (100%)": 0.0,
+        "Change Of Broker Out - TOCOB (120%)": 0.0,
+        "Switch Out (120%)": 0.0
+      },
+      "Totals": {
+        "Total Additions": 0.0,
+        "Total Subtractions": 500000.0,
+        "Net Purchase (Formula)": -500000.0
+      }
+    },
+    "NetPurchase": -500000.0,
+    "Pre_final_incentive": 0.0,
+    "SchemaVersion": "2025-11-15.r1",
+    "annual_trail_rate": 0.8,
+    "base_incentive": 0.0,
+    "config_meta": {
+      "range_mode": "last5",
+      "fy_mode": "FY_APR",
+      "periodic_bonus_enable": false,
+      "periodic_bonus_apply": true
+    },
+    "config_schema_version": "2025-11-15.r1",
+    "employee_alias": "Test Gate Edge Case",
+    "employee_name": "TEST GATE EDGE CASE",
+    "final_incentive": -16.67,
+    "growth_band": "<2%",
+    "growth_pct": -10.0,
+    "incentive_penalty_meta": {
+      "penalty_rupees_raw": 16.66665,
+      "penalty_rupees_applied": 16.66665,
+      "band1_trail_pct": 0.5,
+      "band1_cap_rupees": 5000.0,
+      "band2_rupees": 2500.0,
+      "ls_penalty_strategy": "growth_slab_v1",
+      "np_val": -500000.0
+    },
+    "is_active": true,
+    "meetings_count": 0,
+    "meetings_multiplier": 1.0,
+    "meetings_slab": "0\u20135",
+    "monthly_trail_used": 3333.33,
+    "net_purchase": -500000.0,
+    "positive_np_streak": 0,
+    "rate_used": null,
+    "streak_bonus_rupees": 0.0
+  }
+]

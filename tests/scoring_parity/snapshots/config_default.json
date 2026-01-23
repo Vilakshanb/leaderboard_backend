@@ -1,0 +1,146 @@
+[
+  {
+    "_id": "Leaderboard_Lumpsum",
+    "annual_bonus_template": {
+      "slabs": [
+        {
+          "min_np": 0,
+          "bonus_rupees": 0
+        },
+        {
+          "min_np": 3000000,
+          "bonus_rupees": 0
+        },
+        {
+          "min_np": 7500000,
+          "bonus_rupees": 0
+        },
+        {
+          "min_np": 12000000,
+          "bonus_rupees": 0
+        }
+      ]
+    },
+    "createdAt": "2025-12-22T19:51:42.553542",
+    "ls_penalty": {
+      "enable": true,
+      "band1_trail_pct": 0.5,
+      "band1_cap_rupees": 5000.0,
+      "band2_rupees": 2500.0
+    },
+    "meeting_slabs": [
+      {
+        "max_count": 5,
+        "mult": 1.0,
+        "label": "0\u20135"
+      },
+      {
+        "max_count": 11,
+        "mult": 1.05,
+        "label": "6\u201311"
+      },
+      {
+        "max_count": 17,
+        "mult": 1.075,
+        "label": "12\u201317"
+      },
+      {
+        "max_count": null,
+        "mult": 1.1,
+        "label": "18+"
+      }
+    ],
+    "meta": {
+      "module": "Lumpsum_Scorer",
+      "notes": "Auto-created by runtime bootstrap. Safe to edit fields, preserve schema keys."
+    },
+    "options": {
+      "range_mode": "last5",
+      "fy_mode": "FY_APR",
+      "periodic_bonus_enable": false,
+      "periodic_bonus_apply": true,
+      "audit_mode": "compact"
+    },
+    "qtr_bonus_template": {
+      "slabs": [
+        {
+          "min_np": 0,
+          "bonus_rupees": 0
+        },
+        {
+          "min_np": 1000000,
+          "bonus_rupees": 0
+        },
+        {
+          "min_np": 2500000,
+          "bonus_rupees": 0
+        },
+        {
+          "min_np": 5000000,
+          "bonus_rupees": 0
+        }
+      ]
+    },
+    "rate_slabs": [
+      {
+        "min_pct": 0.0,
+        "max_pct": 0.25,
+        "rate": 0.0006,
+        "label": "0\u2013<0.25%"
+      },
+      {
+        "min_pct": 0.25,
+        "max_pct": 0.5,
+        "rate": 0.0009,
+        "label": "0.25\u2013<0.5%"
+      },
+      {
+        "min_pct": 0.5,
+        "max_pct": 0.75,
+        "rate": 0.00115,
+        "label": "0.5\u2013<0.75%"
+      },
+      {
+        "min_pct": 0.75,
+        "max_pct": 1.25,
+        "rate": 0.00135,
+        "label": "0.75\u2013<1.25%"
+      },
+      {
+        "min_pct": 1.25,
+        "max_pct": 1.5,
+        "rate": 0.00145,
+        "label": "1.25\u2013<1.5%"
+      },
+      {
+        "min_pct": 1.5,
+        "max_pct": 2.0,
+        "rate": 0.00148,
+        "label": "1.5\u2013<2%"
+      },
+      {
+        "min_pct": 2.0,
+        "max_pct": null,
+        "rate": 0.0015,
+        "label": "\u22652%"
+      }
+    ],
+    "schema": "Leaderboard_Lumpsum",
+    "schema_version": "2025-11-15.r1",
+    "status": "active",
+    "weights": {
+      "cob_in_pct": 50,
+      "cob_out_pct": 120,
+      "switch_in_pct": 100,
+      "switch_out_pct": 100,
+      "debt_bonus": {
+        "enable": true,
+        "bonus_pct": 20,
+        "max_debt_ratio_pct": 75,
+        "debt_categories": [
+          "debt"
+        ]
+      }
+    }
+  }
+]

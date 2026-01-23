@@ -1,0 +1,81 @@
+# PLI Leaderboard Configuration Schema
+# Version: 1.0.0
+# Intended for use with 'PLI_Leaderboard.config' collection in MongoDB.
+
+# --- Global / Shared Options ---
+global_options:
+  # Financial Year Mode: 'FY_APR' (Apr-Mar) or 'CAL' (Jan-Dec)
+  fy_mode: "FY_APR"
+
+  # Audit Level: 'compact' (default) or 'full' (verbose metadata)
+  audit_mode: "compact"
+
+  # Range Mode: 'last5', 'fy', 'since', 'twomonths', 'single'
+  # (Module specific overrides possible)
+  range_mode: "last5"
+
+# --- Module: SAP Scorer (MF) ---
+sip_scorer:
+  # Coefficients
+  sip_points_coeff: 0.0288       # Points per INR Net SIP
+  lumpsum_points_coeff: 0.001    # Points per INR Net Lumpsum
+
+  # Tiers (Total Points Thresholds)
+  tier_thresholds:
+    - ["T6", 60000]
+    - ["T5", 40000]
+    - ["T4", 25000]
+    - ["T3", 15000]
+    - ["T2", 8000]
+    - ["T1", 2000]
+    - ["T0", -inf]
+
+  # Tier Factors (Monthly Payout % per Tier)
+  tier_monthly_factors:
+    "T0": 0.0
+    "T1": 0.000016667
+    "T2": 0.000020833
+    "T3": 0.000025000
+    "T4": 0.000029167
+    "T5": 0.000033333
+    "T6": 0.000037500
+
+  # Logic Toggles
+  sip_net_mode: "sip_only"       # 'sip_only' or 'sip_plus_swp'
+  sip_include_swp_in_net: false
+  sip_horizon_months: 24
+
+# --- Module: Lumpsum Scorer ---
+lumpsum_scorer:
+  # Periodic Bonus Switches
+  periodic_bonus_enable: false
+  periodic_bonus_apply: true
+
+  # Bonus Templates (Example Slabs - Net Purchase)
+  qtr_bonus_template:
+    slabs:
+      - { min_np: 0, bonus_rupees: 0 }
+      - { min_np: 1000000, bonus_rupees: 0 }
+      - { min_np: 2500000, bonus_rupees: 0 }
+      - { min_np: 5000000, bonus_rupees: 0 }
+
+  annual_bonus_template:
+    slabs:
+      - { min_np: 0, bonus_rupees: 0 }
+      - { min_np: 3000000, bonus_rupees: 0 }
+      - { min_np: 7500000, bonus_rupees: 0 }
+      - { min_np: 12000000, bonus_rupees: 0 }
+
+  # Negative Growth Penalty Config
+  ls_penalty:
+    enable: true
+    band1_trail_pct: 0.5         # 0.5% of monthly trail
+    band1_cap_rupees: 5000.0     # Cap for Band 1
+    band2_rupees: 2500.0         # Flat penalty for Band 2
+
+# --- Module: Insurance Scorer ---
+insurance_scorer:
+  # (Currently mostly logic-driven, but standardized config hooks below)
+  range_mode: "fy"
+  periodic_bonus_enable: false
+  periodic_bonus_apply: true

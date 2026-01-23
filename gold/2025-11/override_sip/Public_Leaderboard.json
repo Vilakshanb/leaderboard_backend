@@ -1,0 +1,84 @@
+[
+  {
+    "audit": {
+      "buckets": {
+        "ins_points": 0,
+        "mf_points": 20616.0,
+        "ref_points": 0,
+        "total_points_public": 20616.0
+      },
+      "sources": {
+        "insurance": "Insurance_Policy_Scoring",
+        "lumpsum": "Leaderboard_Lumpsum",
+        "referrals": "referralLeaderboard + Referral_Incentives",
+        "sip": "MF_SIP_Leaderboard (Total Points via SIP+LS)"
+      }
+    },
+    "employee_id": "EMP001",
+    "ins_fresh_premium": 0,
+    "ins_points": 0,
+    "ins_policy_count": 0,
+    "ins_renewal_premium": 0,
+    "is_active": true,
+    "lumpsum_cob_in": 0.0,
+    "lumpsum_cob_out": 0.0,
+    "lumpsum_gross_purchase": 15000000.0,
+    "lumpsum_redemption": 0.0,
+    "lumpsum_switch_in": 0.0,
+    "lumpsum_switch_out": 0.0,
+    "mf_points": 20616.0,
+    "period_month": "2025-11",
+    "ref_points": 0,
+    "rm_name": "Test Employee One",
+    "sip_cancel": 20000.0,
+    "sip_gross": 150000.0,
+    "sip_net": 130000.0,
+    "sip_swp_canc": 0.0,
+    "sip_swp_reg": 0.0,
+    "total_points_public": 20616.0,
+    "updated_at_audit": {
+      "collection": "Public_Leaderboard"
+    }
+  },
+  {
+    "audit": {
+      "buckets": {
+        "ins_points": 0,
+        "mf_points": -500.0,
+        "ref_points": 0,
+        "total_points_public": -500.0
+      },
+      "sources": {
+        "insurance": "Insurance_Policy_Scoring",
+        "lumpsum": "Leaderboard_Lumpsum",
+        "referrals": "referralLeaderboard + Referral_Incentives",
+        "sip": "MF_SIP_Leaderboard (Total Points via SIP+LS)"
+      }
+    },
+    "employee_id": "EMPGATE",
+    "ins_fresh_premium": 0,
+    "ins_points": 0,
+    "ins_policy_count": 0,
+    "ins_renewal_premium": 0,
+    "is_active": true,
+    "lumpsum_cob_in": 0.0,
+    "lumpsum_cob_out": 0.0,
+    "lumpsum_gross_purchase": 0.0,
+    "lumpsum_redemption": 500000.0,
+    "lumpsum_switch_in": 0.0,
+    "lumpsum_switch_out": 0.0,
+    "mf_points": -500.0,
+    "period_month": "2025-11",
+    "ref_points": 0,
+    "rm_name": "Test Gate Edge Case",
+    "sip_cancel": 0.0,
+    "sip_gross": 80000.0,
+    "sip_net": 80000.0,
+    "sip_swp_canc": 0.0,
+    "sip_swp_reg": 0.0,
+    "total_points_public": -500.0,
+    "updated_at_audit": {
+      "collection": "Public_Leaderboard"
+    }
+  }
+]

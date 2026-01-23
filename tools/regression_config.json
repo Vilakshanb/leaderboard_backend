@@ -1,0 +1,121 @@
+{
+    "months": [
+        "current_month_minus_2",
+        "current_month_minus_1",
+        "current_month"
+    ],
+    "collections": {
+        "outputs": [
+            {
+                "name": "MF_SIP_Leaderboard",
+                "primary_key": [
+                    "employee_id",
+                    "period_month"
+                ],
+                "strict_fields": [
+                    "total_points",
+                    "tier",
+                    "mf_points",
+                    "sip_points"
+                ]
+            },
+            {
+                "name": "Leaderboard_Lumpsum",
+                "primary_key": [
+                    "employee_id",
+                    "month"
+                ],
+                "strict_fields": [
+                    "total_points",
+                    "lumpsum_points"
+                ]
+            },
+            {
+                "name": "Insurance_Policy_Scoring",
+                "primary_key": [
+                    "employee_id",
+                    "period_month"
+                ],
+                "strict_fields": [
+                    "points_total"
+                ]
+            },
+            {
+                "name": "referralLeaderboard",
+                "primary_key": [
+                    "employee_id",
+                    "period_month"
+                ],
+                "strict_fields": [
+                    "ref_points"
+                ]
+            },
+            {
+                "name": "Public_Leaderboard",
+                "primary_key": [
+                    "employee_id",
+                    "period_month"
+                ],
+                "strict_fields": [
+                    "total_points",
+                    "mf_points",
+                    "ins_points",
+                    "tier"
+                ]
+            },
+            {
+                "name": "Rupee_Incentives",
+                "primary_key": [
+                    "employee_id",
+                    "period_month"
+                ],
+                "strict_fields": [
+                    "payout_rupees",
+                    "tier"
+                ]
+            }
+        ],
+        "inputs": [
+            "internal.transactions",
+            "purchase_txn",
+            "redemption_txn",
+            "switchin_txn",
+            "switchout_txn",
+            "ChangeofBroker",
+            "Insurance_Leads",
+            "Investment_leads",
+            "Zoho_Users",
+            "AUM_Report",
+            "Investor_Meetings_Data"
+        ]
+    },
+    "diff": {
+        "float_abs_tolerance": 1e-6,
+        "float_round_for_compare_decimals": 6,
+        "treat_missing_as_fail": true,
+        "ignore_fields_glob": [
+            "audit.*",
+            "computed_at",
+            "timestamp",
+            "config_hash",
+            "schema_version",
+            "updated_at",
+            "_id",
+            "Audit",
+            "AuditMTD",
+            "Breakdown",
+            "BreakdownMTD"
+        ]
+    },
+    "replay": {
+        "preferred_isolation": "separate_db",
+        "replay_db_name_env": "MONGO_DB_NAME_REPLAY",
+        "drop_replay_before_run": true,
+        "core_db_name_replay": "iwell_replay"
+    },
+    "snapshot": {
+        "baseline_dir": "tests/fixtures/baseline",
+        "allow_prod_snapshot_env": "ALLOW_PROD_SNAPSHOT",
+        "prod_snapshot_default": false
+    }
+}
