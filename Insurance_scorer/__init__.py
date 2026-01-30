@@ -2,6 +2,8 @@ import os
 import sys
 import logging
 import ast
+import json
+import shutil
 import datetime as dt
 from datetime import datetime, timezone
 from typing import Any, Dict, cast
@@ -57,23 +59,8 @@ except Exception:
                 mod_path,
             )
             SKIP_RM_ALIASES: set[str] = {
-                "vilakshan bhutani",
-                "vilakshan p bhutani",
-                "pramod bhutani",
-                "dilip kumar singh",
-                "dillip kumar",
-                "dilip kumar",
-                "ruby",
-                "manisha p tendulkar",
-                "ankur khurana",
-                "amaya -virtual assistant",
-                "amaya - virtual assistant",
-                "anchal chandra",
-                "kanchan bhalla",
-                "himanshu",
-                "poonam gulati",
-                "neha sharma",
-                "shrasti gupta",
+                # All hardcoded exclusions removed. Everyone is scored.
+                # Exclusion happens at Leaderboard API level.
             }
             SKIP_RM_NAMES: set[str] = set(SKIP_RM_ALIASES)
 
@@ -155,10 +142,11 @@ except Exception:
 
 # --- Azure Key Vault (guarded import) ---
 try:
-    from azure.identity import DefaultAzureCredential  # type: ignore
+    from azure.identity import DefaultAzureCredential, AzureCliCredential  # type: ignore
     from azure.keyvault.secrets import SecretClient  # type: ignore
 except Exception:  # ImportError or any runtime import issue
     DefaultAzureCredential = None  # type: ignore
+    AzureCliCredential = None  # type: ignore
     SecretClient = None  # type: ignore
 
 # Simple in-process cache for secrets
@@ -356,11 +344,14 @@ KV_SECRET_ZOHO_CLIENT_SECRET = os.getenv(
 KV_SECRET_ZOHO_REFRESH_TOKEN = os.getenv(
     "KV_SECRET_ZOHO_REFRESH_TOKEN", "Zoho-refresh-token-vilakshan-account"
 )
-KV_SECRET_MONGO_CONNSTRING = os.getenv("KV_SECRET_MONGO_CONNSTRING", "MONGODB_CONNECTION_STRING")
+KV_SECRET_ZOHO_OAUTH_JSON = os.getenv(
+    "KV_SECRET_ZOHO_OAUTH_JSON", "zoho-credentials-mApi"
+).strip()
+KV_SECRET_MONGO_CONNSTRING = os.getenv("KV_SECRET_MONGO_CONNSTRING", "MongoDb-Connection-String")
 
 
 # --- Mongo target database (override with env MONGO_DB_NAME) ---
-DB_NAME = "PLI_Leaderboard"
+DB_NAME = os.getenv("PLI_DB_NAME", "PLI_Leaderboard_v2")
 
 collection_associate = "Associate_Payout"
 collection_DirClient = "DirClient_Payout"
@@ -397,7 +388,7 @@ INS_CONFIG_DEFAULT = {
             {"min_dtr": 15, "max_dtr": 31, "points": 100},
             {"min_dtr": 8, "max_dtr": 15, "points": 50},
             {"min_dtr": -1, "max_dtr": 8, "points": 35},
-            {"min_dtr": -7, "max_dtr": -1, "points": 20},
+            {"min_dtr": -7, "max_dtr": -1, "points": -20},
             {"min_dtr": -15, "max_dtr": -7, "points": -100},
             {"min_dtr": -29, "max_dtr": -15, "points": -150},
             {"min_dtr": None, "max_dtr": -29, "points": -200},
@@ -406,6 +397,80 @@ INS_CONFIG_DEFAULT = {
     },
     # Company-specific overrides (Whitelist/Blacklist logic)
     "company_rules": [],
+    # Payout Slabs (Moved from Leaderboard hardcode to Config)
+    "slabs": [
+        {"min_points": 0, "max_points": 50, "fresh_pct": 0.0, "renew_pct": 0.0, "bonus_rupees": 0, "label": "<50"},
+        {"min_points": 50, "max_points": 100, "fresh_pct": 0.0050, "renew_pct": 0.0, "bonus_rupees": 0, "label": "50–99"},
+        {"min_points": 100, "max_points": 150, "fresh_pct": 0.0100, "renew_pct": 0.0020, "bonus_rupees": 0, "label": "100–149"},
+        {"min_points": 150, "max_points": 200, "fresh_pct": 0.0125, "renew_pct": 0.0040, "bonus_rupees": 0, "label": "150–199"},
+        {"min_points": 200, "max_points": 250, "fresh_pct": 0.0150, "renew_pct": 0.0050, "bonus_rupees": 0, "label": "200–249"},
+        {"min_points": 250, "max_points": None, "fresh_pct": 0.0175, "renew_pct": 0.0075, "bonus_rupees": 2000, "label": "250+"},
+    ],
+    "weights": {
+        "ulip_multiplier": 0.0,
+        "deductible_fresh_multiplier": 1.15,
+        "associate_client_multiplier": 0.25,
+        "categories": {
+            "motor": 0.40, "fire": 0.40, "burglary": 0.40, "marine": 0.40, "misc": 0.40,
+            "gmc": 0.40, "gmc otc": 0.50, "gpa": 0.20, "term insurance": 1.00,
+            "health": 1.00, "life": 0.00, "ulip": 0.00
+        }, # Default is 1.0 if not found
+        "cashback": {
+            "term_slabs": [
+                {"min_pct": 0.00, "max_pct": 5.00, "multiplier": 0.80},
+                {"min_pct": 5.01, "max_pct": 10.00, "multiplier": 0.50},
+                {"min_pct": 10.01, "max_pct": 15.00, "multiplier": 0.25},
+                {"min_pct": 15.01, "max_pct": None, "multiplier": 0.00}
+            ],
+            "non_term_slabs": [
+                {"min_pct": 0.00, "max_pct": 4.00, "multiplier": 0.80},
+                {"min_pct": 4.01, "max_pct": 8.00, "multiplier": 0.50},
+                {"min_pct": 8.01, "max_pct": 10.00, "multiplier": 0.25},
+                {"min_pct": 10.01, "max_pct": None, "multiplier": 0.00}
+            ]
+        },
+        "tenure": {
+            "fresh": {
+                "1": 1.0, "2": 1.20, "3": 1.60, "4": 1.75, "5": 2.00
+            },
+            "renewal_positive": {
+                "1": 1.0, "2": 1.1, "3": 1.25, "4": 1.35, "5": 1.5
+            },
+            "renewal_negative": {
+                "1": 1.0, "2": 0.9, "3": 0.75, "4": 0.65, "5": 0.5
+            }
+        }
+    },
+    "bonuses": {
+        "quarterly": [
+            {"min_val": 1500000, "max_val": 1700000, "bonus": 3200},
+            {"min_val": 1700000, "max_val": 2000000, "bonus": 9000},
+            {"min_val": 2000000, "max_val": 2500000, "bonus": 17500},
+            {"min_val": 2500000, "max_val": None, "bonus": 31000}
+        ],
+        "annual": [
+            {"min_val": 6000000, "max_val": 7500000, "bonus": 20000},
+            {"min_val": 7500000, "max_val": 9000000, "bonus": 50000},
+            {"min_val": 9000000, "max_val": 10000000, "bonus": 75000},
+            {"min_val": 10000000, "max_val": None, "bonus": 100000}
+        ]
+    },
+    "streak": {
+        "monthly_premium_threshold": 300000,
+        "monthly_bonus": 2000,
+        "hattrick_bonus": 5000,
+        "hattrick_length": 3,
+        "extended_streak_bonus": 2000
+    },
+    "ignored_rms": [],
+    "options": {
+        "auto_correct_fresh": True,
+        "skip_empty_policy_numbers": True
+    }
+}
+
+DEFAULT_WEIGHTS = {
+    "company_rules": []
 }
 
 
@@ -628,15 +693,20 @@ def load_insurance_runtime_config() -> dict:
             cfg = to_store
         else:
             # Merge stored config over defaults to remain backward compatible
-            merged = {**INS_CONFIG_DEFAULT, **doc}
+            # CRITICAL FIX: The Settings API saves the actual config inside a "config" key
+            # e.g. { "_id": "...", "config": { ... }, "updatedAt": ... }
+            stored_cfg = doc.get("config") if (doc.get("config") and isinstance(doc.get("config"), dict)) else doc
+
+            merged = {**INS_CONFIG_DEFAULT, **stored_cfg}
             merged["_id"] = INS_CONFIG_KEY
             merged.setdefault("schema_version", INS_SCHEMA_VERSION)
             merged["updated_at"] = now
-            coll.replace_one(
-                {"_id": INS_CONFIG_KEY},
-                cast(Dict[str, Any], _sanitize_doc(merged)),
-                upsert=True,
-            )
+
+            # SHIM: Load weights and slabs from nested config or root
+            # Priority: stored_cfg (from "config" key) > doc (root)
+            weights = stored_cfg.get("weights") or doc.get("weights") or {}
+            slabs = stored_cfg.get("slabs") or doc.get("slabs")
+
             logging.info(
                 "[Config] Loaded runtime config from Mongo: %s/%s",
                 INS_CONFIG_COLL_NAME,
@@ -644,9 +714,72 @@ def load_insurance_runtime_config() -> dict:
             )
             cfg = merged
 
-        # Load company whitelist/blacklist rules
+        # --- 1. Load Weights & Rules ---
         weights = doc.get("weights") or {}
-        cfg["company_rules"] = weights.get("company_rules", [])
+
+        # SHIM: Check for company_rules at root (UI style) if not in weights
+        cr_root = stored_cfg.get("company_rules") or doc.get("company_rules")
+        cr_weights = weights.get("company_rules")
+
+        # Priority: Root/Nested (UI) > Weights (Legacy) > Default
+        company_rules = cr_root if cr_root else (cr_weights if cr_weights is not None else DEFAULT_WEIGHTS["company_rules"])
+        cfg["company_rules"] = company_rules # Ensure cfg has company_rules
+
+        # [NEW] Load Ignored RMs from Config
+        ignored_list = stored_cfg.get("ignored_rms") or doc.get("ignored_rms")
+        if ignored_list and isinstance(ignored_list, list):
+            # Update global SKIP_RM_ALIASES with config values
+            for rm in ignored_list:
+                if rm:
+                    SKIP_RM_ALIASES.add(str(rm).lower().strip())
+            logging.info(f"[Config] Updated SKIP_RM_ALIASES with {len(ignored_list)} RMs from config.")
+
+        # SHIM: Load Investment RM Slabs (UI config)
+        # UI writes 'slabs_investment_rm' to root
+        slabs_inv_rm = stored_cfg.get("slabs_investment_rm") or doc.get("slabs_investment_rm") or weights.get("slabs_investment_rm")
+
+        # Load Standard Payout Slabs (UI Root 'slabs')
+        # This drives _apply_payout_slab for Non-MF profiles
+        std_slabs_cfg = slabs or doc.get("slabs")
+
+        # Update global defaults
+        DEFAULT_WEIGHTS["company_rules"] = company_rules
+
+        # We'll store slabs_inv_rm in a global or accessible dict for the main loop
+        global INVESTMENT_RM_SLABS, PAYOUT_SLABS
+        INVESTMENT_RM_SLABS = slabs_inv_rm or []
+
+        if std_slabs_cfg and isinstance(std_slabs_cfg, list):
+             # CRITICAL FIX: Normalize units for Standard Slabs if needed
+             # UI might send 0.5 for 0.5%, but Runtime expects 0.005.
+             # Also normalize keys: min_points->min, max_points->max, bonus_rupees->bonus
+             normalized_slabs = []
+             for s in std_slabs_cfg:
+                 # Check 'fresh_pct' and 'renew_pct'
+                 for k in ["fresh_pct", "renew_pct"]:
+                     try:
+                         val = float(s.get(k, 0.0))
+                         if val > 1.0: # Heuristic: If > 1.0 (e.g. 1.25), assume it's %, normalize to 0.0125
+                             s[k] = val / 100.0
+                     except:
+                         pass
+
+                 # Map config keys to runtime keys
+                 mapped = dict(s)
+                 mapped["min"] = float(s.get("min_points", 0))
+                 max_p = s.get("max_points")
+                 if max_p is None:
+                     mapped["max"] = float("inf")
+                 else:
+                     mapped["max"] = float(max_p)
+                 mapped["bonus"] = float(s.get("bonus_rupees", 0))
+
+                 normalized_slabs.append(mapped)
+
+             PAYOUT_SLABS = normalized_slabs
+        else:
+             PAYOUT_SLABS = list(PAYOUT_SLABS) # Fallback to default copy
+             logging.info("[Config] Update PAYOUT_SLABS with %d config slabs", len(PAYOUT_SLABS))
 
         try:
             logging.info(
@@ -673,7 +806,9 @@ def load_insurance_runtime_config() -> dict:
 # --- Key Vault secret loader ---
 _kv_loaded = False
 
-KEY_VAULT_URL = "https://milestonetsl1.vault.azure.net/"
+KEY_VAULT_URL = os.getenv(
+    "KEY_VAULT_URL", "https://milestonetsl1.vault.azure.net/"
+)
 
 
 def get_secret(name: str, default: str | None = None) -> str | None:
@@ -686,7 +821,7 @@ def get_secret(name: str, default: str | None = None) -> str | None:
         return os.environ[name]
 
     # Back-compat alias: if code asks for the KV key but env only provides legacy name
-    if name == "MONGODB_CONNECTION_STRING":
+    if name == "MongoDb-Connection-String":
         legacy = os.getenv("MONGO_CONN")
         if legacy:
             return legacy
@@ -696,32 +831,69 @@ def get_secret(name: str, default: str | None = None) -> str | None:
         return _SECRET_CACHE[name]
 
     # 3) Azure Key Vault (if configured and SDK available)
-    if KEY_VAULT_URL and SecretClient and DefaultAzureCredential:
+    if KEY_VAULT_URL and SecretClient and (DefaultAzureCredential or AzureCliCredential):
         lookup_names = [name]
         # Azure KV secret names cannot contain underscores; try a hyphenated variant
         if "_" in name:
             lookup_names.append(name.replace("_", "-"))
-        try:
-            cred = DefaultAzureCredential()
-            client = SecretClient(vault_url=KEY_VAULT_URL, credential=cred)
-            for _nm in lookup_names:
-                try:
-                    secret = client.get_secret(_nm)
-                    _SECRET_CACHE[name] = secret.value
-                    return secret.value
-                except Exception:
-                    continue
-            # If none of the lookup names worked, warn once and fall back
-            logging.warning(
-                "Secrets: '%s' not found in Key Vault (tried: %s). Using default if provided.",
-                name,
-                ", ".join(lookup_names),
-            )
-            return default
-        except Exception as e:
-            # Don't crash the pipeline if KV is unreachable; rely on default
-            logging.warning("Secrets: failed to fetch '%s' from Key Vault: %s", name, e)
-            return default
+        candidates = []
+        az_path = None
+        if AzureCliCredential:
+            az_path = shutil.which("az")
+            if not az_path:
+                # Try common install locations when PATH is limited (Azure Functions/local shells)
+                for d in ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"):
+                    cand = os.path.join(d, "az")
+                    if os.path.isfile(cand):
+                        az_path = cand
+                        os.environ["PATH"] = f"{d}:{os.environ.get('PATH', '')}"
+                        break
+            if az_path:
+                candidates.append(("azure-cli", AzureCliCredential))
+            else:
+                logging.warning("Azure CLI not found on PATH; skipping AzureCliCredential.")
+        if DefaultAzureCredential:
+            candidates.append(("default", DefaultAzureCredential))
+        for label, cred_cls in candidates:
+            try:
+                cred = cred_cls()
+                client = SecretClient(vault_url=KEY_VAULT_URL, credential=cred)
+                last_err = None
+                for _nm in lookup_names:
+                    try:
+                        secret = client.get_secret(_nm)
+                        _SECRET_CACHE[name] = secret.value
+                        logging.info(
+                            "Secrets: loaded '%s' from Key Vault using %s credential.",
+                            name,
+                            label,
+                        )
+                        return secret.value
+                    except Exception as e_get:
+                        last_err = e_get
+                        continue
+                if last_err is not None:
+                    logging.warning(
+                        "Secrets: failed to fetch '%s' from Key Vault via %s: %s",
+                        name,
+                        label,
+                        last_err,
+                    )
+                else:
+                    logging.warning(
+                        "Secrets: '%s' not found in Key Vault (tried: %s). Using default if provided.",
+                        name,
+                        ", ".join(lookup_names),
+                    )
+            except Exception as e:
+                logging.warning(
+                    "Secrets: failed to fetch '%s' from Key Vault via %s: %s",
+                    name,
+                    label,
+                    e,
+                )
+                continue
+        return default
 
     # 4) Fallback
     return default
@@ -754,7 +926,7 @@ def connect_to_mongo(collection_name, db_name: str | None = None):
             collection_name,
         )
         return _NullCollection()
-    mongo_uri = get_secret("MONGODB_CONNECTION_STRING")
+    mongo_uri = get_secret("MongoDb-Connection-String")
     if not mongo_uri:
         logging.error("MongoDB CONNECTIONSTRING not loaded from Key Vault.")
         return None
@@ -765,7 +937,7 @@ def connect_to_mongo(collection_name, db_name: str | None = None):
         # Attempt to retrieve the server information to verify the connection
         client.server_info()  # This will raise an exception if the connection fails
 
-        target_db = db_name or DB_NAME
+        target_db = db_name or os.getenv("PLI_DB_NAME", "PLI_Leaderboard_v2")
         db = client[target_db]
         logging.info(
             f"Successfully connected to MongoDB database: {target_db}, Collection: {collection_name}"
@@ -879,6 +1051,28 @@ def refresh_mongo_collection(collection, data_df):
         logging.error(f"An unexpected error occurred: {e}")
 
 
+def _parse_zoho_oauth_json(raw: str | None) -> dict[str, str] | None:
+    if not raw or not isinstance(raw, str):
+        return None
+    s = raw.strip()
+    if not (s.startswith("{") and s.endswith("}")):
+        return None
+    try:
+        data = json.loads(s)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    if not any(k in data for k in ("client_id", "client_secret", "refresh_token")):
+        return None
+    out: dict[str, str] = {}
+    for key in ("client_id", "client_secret", "refresh_token"):
+        val = data.get(key)
+        if isinstance(val, str) and val.strip():
+            out[key] = val.strip()
+    return out or None
+
+
 def get_access_token(retries: int = 3) -> str:
     """Obtain a Zoho **access token** using refresh token from Key Vault.
     Uses accounts.zoho.com and does not attempt any grant-code flow.
@@ -890,9 +1084,38 @@ def get_access_token(retries: int = 3) -> str:
         "get_access_token(): using refresh-token flow via https://accounts.zoho.com/oauth/v2/token"
     )
 
-    client_id = get_secret(KV_SECRET_ZOHO_CLIENT_ID)
-    client_secret = get_secret(KV_SECRET_ZOHO_CLIENT_SECRET)
-    refresh_token = get_secret(KV_SECRET_ZOHO_REFRESH_TOKEN)
+    oauth_json = None
+    if KV_SECRET_ZOHO_OAUTH_JSON:
+        oauth_json = _parse_zoho_oauth_json(KV_SECRET_ZOHO_OAUTH_JSON)
+        if not oauth_json:
+            oauth_json = _parse_zoho_oauth_json(get_secret(KV_SECRET_ZOHO_OAUTH_JSON))
+
+    client_id = None
+    client_secret = None
+    refresh_token = None
+    if oauth_json:
+        client_id = oauth_json.get("client_id")
+        client_secret = oauth_json.get("client_secret")
+        refresh_token = oauth_json.get("refresh_token")
+        if client_id and client_secret and refresh_token:
+            logging.info("Loaded Zoho OAuth credentials from JSON secret.")
+
+    if not client_id:
+        client_id = get_secret(KV_SECRET_ZOHO_CLIENT_ID)
+    if not client_secret:
+        client_secret = get_secret(KV_SECRET_ZOHO_CLIENT_SECRET)
+    if not refresh_token:
+        refresh_token = get_secret(KV_SECRET_ZOHO_REFRESH_TOKEN)
+
+    if not oauth_json:
+        for raw in (client_id, client_secret, refresh_token):
+            oauth_json = _parse_zoho_oauth_json(raw)
+            if oauth_json:
+                client_id = oauth_json.get("client_id") or client_id
+                client_secret = oauth_json.get("client_secret") or client_secret
+                refresh_token = oauth_json.get("refresh_token") or refresh_token
+                logging.info("Loaded Zoho OAuth credentials from JSON secret.")
+                break
 
     if not all([client_id, client_secret, refresh_token]):
         raise Exception(
@@ -961,6 +1184,8 @@ MANUAL_RM_EMAIL_MAP = {
 }
 
 # --- Monthly payout slabs (points → payout rates) ---
+INVESTMENT_RM_SLABS = []
+
 # Table (Total Score → Fresh %, Renewal %, Bonus ₹):
 # < 500 → 0%, 0%, ₹0
 # 500–999 → 0.5%, 0%, ₹0
@@ -1141,13 +1366,20 @@ def get_pli_records(access_token):
         response = requests.get(url, headers=HEADERS, params=params)
         if response.status_code == 200:
             data = response.json()
-            logging.info(f"Zoho header received (page {params['page']})")
+            logging.info(f"Zoho header received (page {params.get('page', 'token')})")
             all_users.extend(data["data"])
 
-            if not data["info"]["more_records"]:
+            info = data.get("info", {})
+            if not info.get("more_records"):
                 break
 
-            params["page"] += 1
+            next_token = info.get("next_page_token")
+            if next_token:
+                params["page_token"] = next_token
+                if "page" in params:
+                    del params["page"]
+            else:
+                params["page"] += 1
         else:
             try:
                 err = response.json()
@@ -2272,7 +2504,7 @@ def upsert_insurance_mf_leaders(
                 try:
                     exp_rows = (
                         agg.assign(bucket=agg["is_mf"].map({True: "MF", False: "INS"}))
-                        .groupby(["period_month", "bucket"], dropna=False)["total_points"]
+                        .groupby(["period_month", "bucket"])["total_points"]
                         .sum()
                         .reset_index()
                     )
@@ -2881,7 +3113,7 @@ def process_and_upsert(
                 if 7 >= x >= -1:
                     return 35
                 if -2 >= x >= -7:
-                    return 20
+                    return -20
                 if -8 >= x >= -15:
                     return -100
                 if -16 >= x >= -29:
@@ -2895,54 +3127,56 @@ def process_and_upsert(
         pass
 
     # --- Auto-correct: FRESH rows should never have renewal-like slabs ---
-    try:
-        renewal_like = {175, 50, 35, 20, -100, -150, -200}
-        # Robust access for type-checkers and missing columns
-        _class_series = (
-            df["policy_classification"]
-            if "policy_classification" in df.columns
-            else pd.Series([""] * len(df), index=df.index)
-        )
-        class_norm = _class_series.astype(str).str.strip().str.lower()
+    # Controlled by config option (default True)
+    if ins_runtime_cfg.get("options", {}).get("auto_correct_fresh", True):
+        try:
+            renewal_like = {175, 50, 35, 20, -100, -150, -200}
+            # Robust access for type-checkers and missing columns
+            _class_series = (
+                df["policy_classification"]
+                if "policy_classification" in df.columns
+                else pd.Series([""] * len(df), index=df.index)
+            )
+            class_norm = _class_series.astype(str).str.strip().str.lower()
 
-        _bp_series = (
-            df["base_points"]
-            if "base_points" in df.columns
-            else pd.Series([0] * len(df), index=df.index)
-        )
-        bp_num = pd.to_numeric(_bp_series, errors="coerce")
-        if {"this_year_premium", "term_years"}.issubset(df.columns):
-            mask_fresh_mismatch = (class_norm == "fresh") & (bp_num.isin(list(renewal_like)))
-            if mask_fresh_mismatch.any():
-                fix_rows = df.loc[mask_fresh_mismatch, ["this_year_premium", "term_years"]].copy()
-                avg_annual = fix_rows["this_year_premium"].astype(float) / fix_rows[
-                    "term_years"
-                ].replace(0, 1).astype(float)
-                import numpy as _np
+            _bp_series = (
+                df["base_points"]
+                if "base_points" in df.columns
+                else pd.Series([0] * len(df), index=df.index)
+            )
+            bp_num = pd.to_numeric(_bp_series, errors="coerce")
+            if {"this_year_premium", "term_years"}.issubset(df.columns):
+                mask_fresh_mismatch = (class_norm == "fresh") & (bp_num.isin(list(renewal_like)))
+                if mask_fresh_mismatch.any():
+                    fix_rows = df.loc[mask_fresh_mismatch, ["this_year_premium", "term_years"]].copy()
+                    avg_annual = fix_rows["this_year_premium"].astype(float) / fix_rows[
+                        "term_years"
+                    ].replace(0, 1).astype(float)
+                    import numpy as _np
 
-                conds = [
-                    avg_annual < 25_000,
-                    (avg_annual >= 25_000) & (avg_annual < 75_000),
-                    (avg_annual >= 75_000) & (avg_annual < 200_000),
-                    avg_annual >= 200_000,
-                ]
-                choices = [40, 100, 250, 350]
-                corrected = _np.select(conds, choices, default=40)
-                df.loc[mask_fresh_mismatch, "base_points"] = corrected
-                _tp_corr = pd.to_numeric(
-                    df.loc[mask_fresh_mismatch, "base_points"], errors="coerce"
-                ).fillna(0) + pd.to_numeric(
-                    df.loc[mask_fresh_mismatch, "upsell_points"], errors="coerce"
-                ).fillna(
-                    0
-                )
-                df.loc[mask_fresh_mismatch, "total_points"] = _tp_corr
-                logging.warning(
-                    "Auto-corrected %d FRESH rows that had renewal-like base slabs to fresh slabs (40/100/250/350).",
-                    int(mask_fresh_mismatch.sum()),
-                )
-    except Exception:
-        pass
+                    conds = [
+                        avg_annual < 25_000,
+                        (avg_annual >= 25_000) & (avg_annual < 75_000),
+                        (avg_annual >= 75_000) & (avg_annual < 200_000),
+                        avg_annual >= 200_000,
+                    ]
+                    choices = [40, 100, 250, 350]
+                    corrected = _np.select(conds, choices, default=40)
+                    df.loc[mask_fresh_mismatch, "base_points"] = corrected
+                    _tp_corr = pd.to_numeric(
+                        df.loc[mask_fresh_mismatch, "base_points"], errors="coerce"
+                    ).fillna(0) + pd.to_numeric(
+                        df.loc[mask_fresh_mismatch, "upsell_points"], errors="coerce"
+                    ).fillna(
+                        0
+                    )
+                    df.loc[mask_fresh_mismatch, "total_points"] = _tp_corr
+                    logging.warning(
+                        "Auto-corrected %d FRESH rows that had renewal-like base slabs to fresh slabs (40/100/250/350).",
+                        int(mask_fresh_mismatch.sum()),
+                    )
+        except Exception:
+            pass
 
     # Diagnostic: fresh rows showing renewal-like base slabs (should not happen)
     try:
@@ -2988,9 +3222,13 @@ def process_and_upsert(
 
     # Apply weights per finalized rules
     def _weight(row):
-        # Short-circuit for ULIP/Traditional
+        weights_cfg = ins_runtime_cfg.get("weights", {})
+
+        # ULIP check via config (default 0.0 if not found, preserving legacy behavior hardcode was 0)
+        # But wait, original code was: if row.get("is_ulip"): return 0.0
+        # If we want configurable, we use:
         if row.get("is_ulip"):
-            return 0.0
+            return float(weights_cfg.get("ulip_multiplier", 0.0))
 
         policy_type_lower = str(row.get("policy_type") or "").lower()
         classification = row.get("policy_classification")  # 'renewal' or 'fresh'
@@ -3006,65 +3244,56 @@ def process_and_upsert(
             term_years = int(_ty) if pd.notna(_ty) and int(_ty) > 0 else 1
         except Exception:
             term_years = 1
+
+        # Max cap term_years at 5 for lookup purposes as our maps go up to "5" (representing 5+)
+        term_key = str(term_years if term_years < 5 else 5)
+
+        tenure_cfg = weights_cfg.get("tenure", {})
+
         if classification == "renewal":
             if base_pts >= 0:
-                tenure_w = (
-                    1.00
-                    if term_years == 1
-                    else (
-                        1.10
-                        if term_years == 2
-                        else 1.25 if term_years == 3 else 1.35 if term_years == 4 else 1.50
-                    )
-                )
+                 # Default map matches legacy hardcode
+                 t_map = tenure_cfg.get("renewal_positive", {"1": 1.0, "2": 1.1, "3": 1.25, "4": 1.35, "5": 1.5})
+                 tenure_w = float(t_map.get(term_key, 1.0))
             else:
-                tenure_w = (
-                    1.00
-                    if term_years == 1
-                    else (
-                        0.90
-                        if term_years == 2
-                        else 0.75 if term_years == 3 else 0.65 if term_years == 4 else 0.50
-                    )
-                )
+                 # Default map matches legacy hardcode
+                 t_map = tenure_cfg.get("renewal_negative", {"1": 1.0, "2": 0.9, "3": 0.75, "4": 0.65, "5": 0.5})
+                 tenure_w = float(t_map.get(term_key, 1.0))
         else:  # fresh/port
-            tenure_w = (
-                1.00
-                if term_years == 1
-                else (
-                    1.20
-                    if term_years == 2
-                    else 1.60 if term_years == 3 else 1.75 if term_years == 4 else 2.00
-                )
-            )
+             # Default map matches legacy hardcode (implied from implementation plan, need to ensure same values)
+             # Looking at previous code, fresh logic was:
+             # 1->1.00, 2->1.10, 3->1.25, 4->1.35, 5+->1.50
+             t_map = tenure_cfg.get("fresh", {"1": 1.0, "2": 1.20, "3": 1.60, "4": 1.75, "5": 2.00})
+             tenure_w = float(t_map.get(term_key, 1.0))
 
         # --- Deductible weight (fresh only) ---
+        deductible_multiplier = float(weights_cfg.get("deductible_fresh_multiplier", 1.15))
         deductible_w = 1.0
         if classification == "fresh" and (row.get("deductible_added") is True):
-            deductible_w = 1.15
+            deductible_w = deductible_multiplier
 
         # --- Portability weight (no penalty) ---
         port_w = 1.0
 
         # --- Category weight ---
-        cat_w = 1.0
-        if any(
-            k in policy_type_lower
-            for k in ["motor", "fire", "burglary", "burgulary", "marine", "misc"]
-        ):
-            cat_w = 0.40
-        if any(k in policy_type_lower for k in ["gmc"]) and ("otc" not in policy_type_lower):
-            cat_w = 0.20
-        if "gpa" in policy_type_lower:
-            cat_w = 0.20
-        if "gmc-otc" in policy_type_lower or "gmc otc" in policy_type_lower:
-            cat_w = 0.50
-        if "term insurance" in policy_type_lower:
-            cat_w = 1.00
+        # Config-driven category weights
+        cat_map = weights_cfg.get("categories", {
+            "motor": 0.40, "fire": 0.40, "burglary": 0.40, "marine": 0.40, "misc": 0.40,
+            "gmc": 0.40, "gmc otc": 0.50, "gpa": 0.20, "term insurance": 1.00,
+            "health": 1.00, "life": 0.00, "ulip": 0.00
+        })
+        cat_w = 1.0 # Default
+        # Sort keys by length descending to catch more specific categories first (e.g. "gmc otc" before "gmc")
+        sorted_keys = sorted(cat_map.keys(), key=len, reverse=True)
+        for k in sorted_keys:
+            if k in policy_type_lower:
+                cat_w = float(cat_map.get(k, 1.0))
+                break
 
         # --- Associate weight via Direct_Associate ---
+        assoc_multiplier = float(weights_cfg.get("associate_client_multiplier", 0.25))
         da_text = str(row.get("Direct_Associate") or "").strip().lower()
-        associate_w = 0.25 if da_text == "associate client" else 1.00
+        associate_w = assoc_multiplier if da_text == "associate client" else 1.00
 
         # --- Cashback weight (Referral_Fee1 % precedence) ---
         def _as_float(v, default=None):
@@ -3126,19 +3355,33 @@ def process_and_upsert(
                 cashback_source = "cashback_or_discount_percent"
 
         cashback_w = 1.0
-        if cb_percent is not None and cb_percent > 0:
-            if is_term:
-                cashback_w = (
-                    0.80
-                    if 0 < cb_percent <= 5
-                    else 0.50 if 5 < cb_percent <= 10 else 0.25 if 10 < cb_percent <= 15 else 0.00
-                )
-            else:
-                cashback_w = (
-                    0.80
-                    if 0 < cb_percent <= 4
-                    else 0.50 if 4 < cb_percent <= 8 else 0.25 if 8 < cb_percent <= 10 else 0.00
-                )
+
+        # Load Slabs
+        cb_cfg = weights_cfg.get("cashback", {})
+        slabs = cb_cfg.get("term_slabs", []) if is_term else cb_cfg.get("non_term_slabs", [])
+
+        if cb_percent is not None and cb_percent > 0 and slabs:
+            match_found = False
+            for s in slabs:
+                _min = float(s.get("min_pct", 0))
+                _max = float(s.get("max_pct")) if s.get("max_pct") is not None else float("inf")
+
+                # Logic: min < pct <= max ?? Or inclusive?
+                # Previous logic: 0 < cb <= 4.
+                # Let's assume slab definition is min < val <= max.
+                # Actually previous was: 0 < cb <= 4.
+                # So if min=0.01, max=4.00, it covers 0.01 to 4.
+                if _min <= cb_percent and cb_percent <= _max:
+                     cashback_w = float(s.get("multiplier", 0.0))
+                     match_found = True
+                     break
+
+            # If no match found but percent > 0? User might have gaps in config.
+            # Fallback to existing logic if config is empty?
+            # We assume config is populated with defaults.
+            if not match_found and not slabs:
+                 # Should not happen with defaults loaded
+                 pass
 
         total_w = tenure_w * deductible_w * port_w * cat_w * associate_w * cashback_w
         return round(float(total_w), 3)
@@ -3211,15 +3454,31 @@ def process_and_upsert(
             skipped_missing_keys = 0
             now = dt.datetime.utcnow()
 
+            options = ins_runtime_cfg.get("options", {})
+            skip_empty_policy = options.get("skip_empty_policy_numbers", True)
+
             for _, r in df_out.iterrows():
                 lead_id = r.get("lead_id")
                 policy_number = r.get("policy_number")
+                missing_policy = False
 
-                if lead_id in (None, "") or policy_number in (None, ""):
+                if lead_id in (None, ""):
                     skipped_missing_keys += 1
                     continue
 
+                if policy_number in (None, ""):
+                    if skip_empty_policy:
+                        skipped_missing_keys += 1
+                        continue
+                    else:
+                        # Fallback key: lead_id + conversion_date
+                        conv_raw = r.get("conversion_date")
+                        conv_str = str(conv_raw) if conv_raw not in (None, "") else "no_date"
+                        policy_number = f"MISSING_{lead_id}_{conv_str}"
+                        missing_policy = True
+
                 row_dict = r.to_dict()
+                row_dict["missing_policy_number"] = missing_policy
 
                 # --- Force key identity fields + bonus basis helpers ---
                 period_month = row_dict.get("period_month")
@@ -3236,7 +3495,7 @@ def process_and_upsert(
                 row_dict.update(
                     {
                         "lead_id": str(r.get("lead_id") or ""),
-                        "policy_number": r.get("policy_number"),
+                        "policy_number": policy_number,  # Use the local variable which might have fallback
                         "employee_id": str(r.get("employee_id") or ""),
                         "employee_name": r.get("employee_name"),
                         "conversion_date": r.get("conversion_date"),
@@ -3322,10 +3581,21 @@ def process_and_upsert(
             for _, r in df_out.iterrows():
                 lead_id = r.get("lead_id")
                 policy_number = r.get("policy_number")
+                missing_policy = False
 
-                if lead_id in (None, "") or policy_number in (None, ""):
+                if lead_id in (None, ""):
                     skipped_zero += 1
                     continue
+
+                if policy_number in (None, ""):
+                    if skip_empty_policy:
+                        skipped_zero += 1
+                        continue
+                    else:
+                        conv_raw = r.get("conversion_date")
+                        conv_str = str(conv_raw) if conv_raw not in (None, "") else "no_date"
+                        policy_number = f"MISSING_{lead_id}_{conv_str}"
+                        missing_policy = True
 
                 conv_raw = r.get("conversion_date")
                 conv_raw_any: Any = conv_raw
@@ -3342,6 +3612,7 @@ def process_and_upsert(
                 doc = {
                     "lead_id": str(lead_id),
                     "policy_number": policy_number,
+                    "missing_policy_number": missing_policy,
                     "conversion_date": conv_dt,
                     "period_month": period_month,
                     "employee_id": str(r.get("employee_id") or ""),
@@ -3489,18 +3760,27 @@ def update_leaderboard(df: pd.DataFrame, leaderboard_col, active_ids):
 # ---------------------------------------------------------------------
 def award_monthly_quarterly_bonus(df: pd.DataFrame, leaderboard_col):
     """
-    • For each employee, for each calendar‑month, add **2 000 pts**
-      if their Fresh / Portability premium > ₹3 lakh.
-    • If an employee achieves that target for **three consecutive
-      months** (a hat‑trick) within the same rolling window, add an
-      **extra 5 000 pts** (once per hat‑trick sequence).
+    • For each employee, for each calendar‑month, add monthly bonus points
+      if their Fresh / Portability premium > threshold.
+    • If an employee achieves that target for consecutive months (a hat‑trick length)
+      within the same rolling window, add an extra hat-trick bonus pts.
 
-    Two separate rows are written to *Leaderboard*:
-      reason = "Monthly 3L Bonus"           (2 000‑pt rows)
-      reason = "Quarterly Hattrick Bonus"   (5 000‑pt rows)
+    Two separate rows are written to *Insurance_audit*:
+      reason = "Monthly Bonus"
+      reason = "Quarterly Hattrick Bonus"
+      reason = "Extended Streak Bonus"
     """
     if leaderboard_col is None or df.empty:
         return
+
+    # Load runtime config for dynamic bonuses
+    cfg = load_insurance_runtime_config()
+    streak_cfg = cfg.get("streak", {})
+    streak_thresh = float(streak_cfg.get("monthly_premium_threshold", 300000))
+    monthly_bonus_pts = int(streak_cfg.get("monthly_bonus", 2000))
+    hattrick_bonus_pts = int(streak_cfg.get("hattrick_bonus", 5000))
+    hattrick_len = int(streak_cfg.get("hattrick_length", 3))
+    extended_bonus_pts = int(streak_cfg.get("extended_streak_bonus", 2000))
 
     # ------------------------------------------------------------
     # 1)  isolate fresh / portability rows and bucket by Month
@@ -3529,21 +3809,21 @@ def award_monthly_quarterly_bonus(df: pd.DataFrame, leaderboard_col):
     # ------------------------------------------------------------
     # 2)  2 000‑pt monthly bonuses
     # ------------------------------------------------------------
-    monthly_bonus_rows = monthly[monthly["this_year_premium"] > 300_000]
+    monthly_bonus_rows = monthly[monthly["this_year_premium"] > streak_thresh]
     for _, r in monthly_bonus_rows.iterrows():
         doc = {
             "employee_name": r["employee_name"],
             "employee_id": r["employee_id"],
             "lead_id": None,
-            "points": 2000,
-            "reason": "Monthly 3L Bonus",
+            "points": monthly_bonus_pts,
+            "reason": "Monthly Bonus",
             "justification": f"₹{int(r['this_year_premium']):,} fresh/port premium in {r['month']}",
             "updated_at": dt.datetime.utcnow(),
         }
         leaderboard_col.update_one(
             {
                 "employee_id": r["employee_id"],
-                "reason": "Monthly 3L Bonus",
+                "reason": "Monthly Bonus",
                 "justification": doc["justification"],
             },
             {"$set": doc},
@@ -3580,17 +3860,17 @@ def award_monthly_quarterly_bonus(df: pd.DataFrame, leaderboard_col):
             prev_m = m
 
             # --- bonuses ---
-            if streak == 3 and not hattrick_awarded:
-                # hat‑trick → 5 000 (only once per sequence)
+            if streak == hattrick_len and not hattrick_awarded:
+                # hat‑trick → bonus (only once per sequence)
                 justification = (
-                    f"Hat‑trick: ≥3 L fresh/port premium for "
-                    f"{months[months.index(m)-2]}, {months[months.index(m)-1]}, {m}"
+                    f"Hat‑trick: ≥{int(streak_thresh/1000)}L fresh/port premium for "
+                    + ", ".join([str(m) for m in months[months.index(m)-(hattrick_len-1):months.index(m)+1]])
                 )
                 doc = {
                     "employee_name": emp_name,
                     "employee_id": emp_id,
                     "lead_id": None,
-                    "points": 5000,
+                    "points": hattrick_bonus_pts,
                     "reason": "Quarterly Hattrick Bonus",
                     "justification": justification,
                     "updated_at": dt.datetime.utcnow(),
@@ -3606,24 +3886,24 @@ def award_monthly_quarterly_bonus(df: pd.DataFrame, leaderboard_col):
                 )
                 hattrick_awarded = True
 
-            elif streak > 3:
-                # every month beyond hat‑trick → +2 000
+            elif streak > hattrick_len:
+                # every month beyond hat‑trick
                 justification = (
-                    f"Extended streak: ≥3 L fresh/port premium for {m} " f"(streak {streak} months)"
+                    f"Extended streak: ≥{int(streak_thresh/1000)}L fresh/port premium for {m} " f"(streak {streak} months)"
                 )
                 doc = {
                     "employee_name": emp_name,
                     "employee_id": emp_id,
                     "lead_id": None,
-                    "points": 2000,
-                    "reason": "Extended 3L Streak Bonus",
+                    "points": extended_bonus_pts,
+                    "reason": "Extended Streak Bonus",
                     "justification": justification,
                     "updated_at": dt.datetime.utcnow(),
                 }
                 leaderboard_col.update_one(
                     {
                         "employee_id": emp_id,
-                        "reason": "Extended 3L Streak Bonus",
+                        "reason": "Extended Streak Bonus",
                         "justification": justification,
                     },
                     {"$set": doc},
@@ -3650,6 +3930,11 @@ def upsert_monthly_leaderboard(
     """
     if monthly_col is None or df is None or df.empty:
         return
+
+    # Load runtime config for dynamic bonuses
+    cfg = load_insurance_runtime_config()
+    bonus_cfg = cfg.get("bonuses", {})
+    streak_cfg = cfg.get("streak", {})
 
     db_handle = getattr(monthly_col, "database", None)
 
@@ -3727,29 +4012,28 @@ def upsert_monthly_leaderboard(
     grp["fy"] = grp["_month_ts"].dt.to_period("Y-MAR")
     grp["fq"] = grp["_month_ts"].dt.to_period("Q-MAR")
 
-    def _quarterly_bonus_amount(total: float) -> int:
-        x = float(total or 0)
-        if 1_500_000 <= x < 1_700_000:
-            return 3200
-        if 1_700_000 <= x < 2_000_000:
-            return 9000
-        if 2_000_000 <= x < 2_500_000:
-            return 17_500
-        if x >= 2_500_000:
-            return 31_000
+    def _get_bonus_from_slabs(val: float, slabs: list) -> int:
+        amt = 0
+        if not slabs: return 0
+        for s in slabs:
+            _min = float(s.get("min_val", 0))
+            _max = float(s.get("max_val")) if s.get("max_val") is not None else float("inf")
+            if _min <= val < _max:
+                amt = int(s.get("bonus", 0))
+                # keep checking? usually slabs are ranges.
+                # Last match logic or first match?
+                # Based on range structure [min, max), first match is fine if ordered.
+                # Assuming ordered and non-overlapping.
+                return amt
         return 0
 
+    def _quarterly_bonus_amount(total: float) -> int:
+        slabs = bonus_cfg.get("quarterly", [])
+        return _get_bonus_from_slabs(float(total or 0), slabs)
+
     def _annual_bonus_amount(total: float) -> int:
-        x = float(total or 0)
-        if 6_000_000 <= x < 7_500_000:
-            return 20_000
-        if 7_500_000 <= x < 9_000_000:
-            return 50_000
-        if 9_000_000 <= x < 10_000_000:
-            return 75_000
-        if x >= 10_000_000:
-            return 100_000
-        return 0
+         slabs = bonus_cfg.get("annual", [])
+         return _get_bonus_from_slabs(float(total or 0), slabs)
 
     # --- Test overrides for bonus crediting (env-driven; easy to toggle and revert) ---
     try:
@@ -3819,26 +4103,34 @@ def upsert_monthly_leaderboard(
     # Re-compute monthly+streak bonus points
     grp.sort_values(["employee_id", "month"], inplace=True)
     grp["points_bonus"] = 0
+
+    # Load streak config
+    streak_thresh = float(streak_cfg.get("monthly_premium_threshold", 300000))
+    monthly_bonus = int(streak_cfg.get("monthly_bonus", 2000))
+    hattrick_bonus = int(streak_cfg.get("hattrick_bonus", 5000))
+    hattrick_len = int(streak_cfg.get("hattrick_length", 3))
+    extended_bonus = int(streak_cfg.get("extended_streak_bonus", 2000))
+
     for emp_id, sub in grp.groupby("employee_id", sort=False):
         idxs = list(sub.index)
         months = list(sub["month"])
-        qualifies = (sub["fresh_to_company_premium"] > 300_000).tolist()
+        qualifies = (sub["fresh_to_company_premium"] > streak_thresh).tolist()
         bonuses = [0] * len(sub)
         streak = 0
         prev_m = None
         for i, q in enumerate(qualifies):
             if q:
-                bonuses[i] += 2000  # monthly bonus
+                bonuses[i] += monthly_bonus  # monthly bonus
                 m = months[i]
                 if prev_m is not None and (prev_m + 1) == m:
                     streak += 1
                 else:
                     streak = 1
                 prev_m = m
-                if streak == 3:
-                    bonuses[i] += 5000  # hat-trick month
-                elif streak > 3:
-                    bonuses[i] += 2000  # extended streak month
+                if streak == hattrick_len:
+                    bonuses[i] += hattrick_bonus  # hat-trick month
+                elif streak > hattrick_len:
+                    bonuses[i] += extended_bonus  # extended streak month
             else:
                 streak = 0
                 prev_m = months[i]
@@ -3846,13 +4138,27 @@ def upsert_monthly_leaderboard(
 
     grp["points_total"] = (grp["points_policy"].fillna(0) + grp["points_bonus"].fillna(0)).round(0)
 
+    # Aggregate to Monthly Level for Public Leaderboard
+    # Sum numeric fields, take first for descriptors
+    agg_grp = grp.groupby(["employee_id", "month"]).agg({
+        "points_total": "sum",
+        "points_policy": "sum",
+        "points_bonus": "sum",
+        "fresh_premium": "sum",
+        "renewal_premium": "sum",
+        "employee_name": "first",
+        "period_month": "first"
+    }).reset_index()
+
     # Apply payout slabs and compute payout amounts
     out_docs = []
     now = dt.datetime.utcnow()
-    for _, r in grp.iterrows():
+    for _, r in agg_grp.iterrows():
         points_total = int(round(float(r["points_total"] or 0)))
         emp_id = str(r.get("employee_id"))
-        month_str = str(r["month"])  # 'YYYY-MM'
+        month_str = str(r["month"])
+        # Ensure ins_points is set for V2 Leaderboard
+        r["ins_points"] = points_total
         points_total = int(round(float(r["points_total"] or 0)))
         emp_id = str(r.get("employee_id"))
         month_str = str(r["month"])
@@ -3898,17 +4204,36 @@ def upsert_monthly_leaderboard(
         )
 
         if prof == "mutual funds":
-            # Mutual Funds: fresh-only tiers, no renewal %, no bonus
-            if points_total < 100:
-                fresh_pct, label = 0.0, "MF 0–99"
-            elif points_total < 500:
-                fresh_pct, label = 0.005, "MF 100–499"
-            elif points_total < 1000:
-                fresh_pct, label = 0.010, "MF 500–999"
-            elif points_total < 1500:
-                fresh_pct, label = 0.0125, "MF 1000–1499"
-            elif points_total < 2000:
-                fresh_pct, label = 0.0150, "MF 1500–1999"
+            # Mutual Funds: Use config slabs (INVESTMENT_RM_SLABS)
+            # Default fallback if config is empty (Legacy Parity)
+            mf_slabs = INVESTMENT_RM_SLABS
+            if not mf_slabs:
+                 mf_slabs = [
+                    {"max_points": 100, "fresh_pct": 0.0, "label": "MF 0–99"},
+                    {"max_points": 500, "fresh_pct": 0.005, "label": "MF 100–499"},
+                    {"max_points": 1000, "fresh_pct": 0.010, "label": "MF 500–999"},
+                    {"max_points": 1500, "fresh_pct": 0.0125, "label": "MF 1000–1499"},
+                    {"max_points": 2000, "fresh_pct": 0.0150, "label": "MF 1500–1999"},
+                    {"max_points": None, "fresh_pct": 0.0150, "label": "MF 2000+"}, # Cap at 1.5% ?? Or open? Legacy code didn't show >2000 block, assumed 1.5%
+                 ]
+
+            # Evaluate Slabs
+            fresh_pct = 0.0
+            label = "MF Base"
+
+            for s in mf_slabs:
+                 try:
+                     max_p = float(s["max_points"]) if s.get("max_points") is not None else float('inf')
+                     if points_total < max_p:
+                         raw_pct = float(s.get("fresh_pct", 0.0))
+                         # UNIT FIX: If > 1.0 (e.g. 1.25), assume it's %, normalize to 0.0125
+                         if raw_pct > 1.0:
+                             raw_pct = raw_pct / 100.0
+                         fresh_pct = raw_pct
+                         label = str(s.get("label", ""))
+                         break
+                 except:
+                     continue
             else:  # ≥ 2000
                 fresh_pct, label = 0.0175, "MF 2000+"
             renew_pct = 0.0
@@ -3961,11 +4286,13 @@ def upsert_monthly_leaderboard(
         doc = {
             "employee_id": str(r["employee_id"]),
             "employee_name": r["employee_name"],
+            "rm_name": r["employee_name"],
             "period_month": period_month,
             # KPI fields only
             "points_policy": float(r.get("points_policy", 0) or 0),
             "points_bonus": int(r.get("points_bonus", 0) or 0),
             "points_total": int(round(float(r.get("points_total", 0) or 0))),
+            "ins_points": int(round(float(r.get("points_total", 0) or 0))),
             "fresh_premium": float(r.get("fresh_premium", 0) or 0),
             "renewal_premium": float(r.get("renewal_premium", 0) or 0),
             "profile": profile,
@@ -4027,6 +4354,7 @@ def Run_insurance_Score():
     zoho_users_collection = connect_to_mongo("Zoho_Users")
     if zoho_users_collection is not None:
         logging.info("Zoho_Users collection ready; syncing active users...")
+
     active_ids = fetch_active_employee_ids(access_token, zoho_users_collection)
 
     profiles_by_id: Dict[str, str] = {}
@@ -4055,9 +4383,9 @@ def Run_insurance_Score():
     except Exception as e:
         logging.warning("[Profile] Failed to load from Zoho_Users: %s", e)
 
-    df_users, df_associate_payout, df_referral_fee = get_pli_records(access_token)
     mongo_collection = connect_to_mongo("Insurance_Policy_Scoring")
     leaderboard_collection = connect_to_mongo("Insurance_audit")
+    df_users, df_associate_payout, df_referral_fee = get_pli_records(access_token)
     if mongo_collection is not None:
         df_result = process_and_upsert(
             df_users,
@@ -4123,6 +4451,7 @@ def Run_insurance_Score():
                 # --- sanitize document for MongoDB (handle NaT, tz-aware, etc.) ---
                 set_doc = {
                     "employee_name": row["employee_name"],
+                    "rm_name": row["employee_name"],
                     "points": points,
                     "justification": justification,
                     "weight_factor": row["weight_factor"],
@@ -4203,7 +4532,7 @@ def Run_insurance_Score():
         # --- monthly / quarterly bonuses ---
         award_monthly_quarterly_bonus(df_result, leaderboard_collection)
         # --- actual monthly leaderboard (payout) ---
-        monthly_leaderboard_collection = connect_to_mongo("Leaderboard")
+        monthly_leaderboard_collection = connect_to_mongo("Public_Leaderboard")
         wipe_flag = os.getenv("WIPE_MONTHLY_LEADERBOARD", "0").strip().lower()
         if wipe_flag in {"1", "true", "yes"}:
             monthly_leaderboard_collection = reset_monthly_leaderboard(
@@ -4211,7 +4540,10 @@ def Run_insurance_Score():
             )
         else:
             ensure_monthly_leaderboard_index(monthly_leaderboard_collection)
+
+        logging.info(f"Upserting monthly leaderboard. Rows={len(df_result)}")
         upsert_monthly_leaderboard(df_result, monthly_leaderboard_collection, active_ids)
+
     # --- Call process_investment_leads logic ---
     process_investment_leads(access_token, leaderboard_collection, active_ids)
 

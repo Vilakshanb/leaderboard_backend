@@ -164,7 +164,7 @@ def _lookup_aum_for_rm_month(db_or_client, rm_name: str, month_key: str) -> Opti
         except Exception:
             # Fallback: try PLI_Leaderboard.AUM_Report if iwell is not present
             try:
-                db = client.get_database("PLI_Leaderboard")
+                db = client.get_database(os.getenv("PLI_DB_NAME", "PLI_Leaderboard_v2"))
                 coll = db.get_collection(coll_name)
             except Exception:
                 _AUM_MISS_SEEN.add(cache_key)
@@ -211,24 +211,8 @@ RECON_OK = {"RECONCILED", "RECONCILED_WITH_MINOR"}
 
 # --- SIP Scorer schema & config metadata (aligned with Lumpsum architecture) ---
 SKIP_RM_ALIASES: set[str] = {
-    "vilakshan bhutani",
-    "vilakshan p bhutani",
-    "pramod bhutani",
-    "dilip kumar singh",
-    "dillip kumar",
-    "dilip kumar",
-    "ruby",
-    "manisha p tendulkar",
-    "ankur khurana",
-    "amaya -virtual assistant",
-    "amaya - virtual assistant",
-    "anchal chandra",
-    "anchal ch",
-    "kanchan bhalla",
-    "himanshu",
-    "poonam gulati",
-    "ritesh",
-    "ritesh kumar",
+    # All hardcoded exclusions removed. Everyone is scored.
+    # Exclusion happens at Leaderboard API level.
 }
 
 # --- SIP Scorer schema & config metadata (aligned with Lumpsum architecture) ---
@@ -267,10 +251,9 @@ TIER_MONTHLY_FACTORS = {
     "T6": 0.000037500,  # annual 0.045% / 12
 }
 SIP_POINTS_COEFF = 0.03  # points per ₹ of effective Net SIP
-# Lumpsum points coefficient is runtime-resolved from the Lumpsum leaderboard/config,
-# with a static default as a safe fallback.
-LUMPSUM_POINTS_COEFF_DEFAULT = 0.001  # default points per ₹ of Net Lumpsum
-LUMPSUM_POINTS_COEFF = LUMPSUM_POINTS_COEFF_DEFAULT
+SIP_BASE_BPS = 0.0  # Base BPS (e.g. 125.0) overriding the coefficient derivation if set
+# SIP_HATTRICK_BPS deprecated in favor of BONUS_SLABS_CONSISTENCY
+
 
 # --- Lumpsum gate thresholds (Mongo-driven, can override at runtime) ---
 SIP_LS_GATE_PCT_DEFAULT = float(os.getenv("PLI_LS_GATE_PCT", "-3.0") or -3.0)
@@ -300,6 +283,7 @@ BONUS_SLABS_AVG = [
     (5000.0, 1.0),
     (3000.0, 0.5),
 ]
+BONUS_SLABS_CONSISTENCY = [] # List of dict: {min_months, min_ratio, min_amount, bps}
 
 # --- SIP range / window behaviour (env-driven; config mirrors this) ---
 SIP_RANGE_MODE_DEFAULT = os.getenv("PLI_SIP_RANGE_MODE", "month").strip().lower() or "month"
@@ -310,6 +294,23 @@ SIP_NET_MODE_DEFAULT = "sip_only"  # "sip_only" or "sip_plus_swp"
 SIP_INCLUDE_SWP_IN_NET_DEFAULT = False
 SWP_WEIGHTS_DEFAULT = {"registration": -1.0, "cancellation": 1.0}
 SIP_HORIZON_MONTHS_DEFAULT = 24
+
+# Penalty defaults
+PENALTY_ENABLED = True
+PENALTY_SLABS: list[dict] = []
+
+# Scheme weightage defaults
+DEFAULT_WEIGHTS: dict[str, Any] = {
+    "scheme_rules": []
+}
+
+# Scheme weight application control (which transaction types get weighted)
+SCHEME_WEIGHT_APPLY_TO: dict[str, bool] = {
+    "sip_registration": True,   # Default: enabled
+    "sip_cancellation": False,  # Default: disabled
+    "swp_registration": False,  # Default: disabled
+    "swp_cancellation": False   # Default: disabled
+}
 
 # Runtime-effective knobs (populated from Mongo config in _load_runtime_config)
 SIP_NET_MODE = SIP_NET_MODE_DEFAULT
@@ -385,7 +386,7 @@ def get_secret(name: str, default: str | None = None) -> str | None:
         return env_val
 
     # Back-compat aliases if caller asked for the canonical KV key but env has legacy names
-    if name == "MONGODB_CONNECTION_STRING":
+    if name == "MongoDb-Connection-String":
         legacy = os.getenv("MONGO_CONN") or os.getenv("MONGO_URI") or os.getenv("MONGODB_URI")
         if legacy:
             _SECRET_CACHE[name] = legacy
@@ -475,9 +476,9 @@ def _lookup_employee_active_and_id(
     """
     try:
         if hasattr(db_or_client, "get_database"):
-            db_ref = db_or_client.get_database("PLI_Leaderboard")
+            db_ref = db_or_client.get_database(os.getenv("PLI_DB_NAME", "PLI_Leaderboard_v2"))
         elif hasattr(db_or_client, "client"):
-            db_ref = db_or_client.client.get_database("PLI_Leaderboard")  # type: ignore[attr-defined]
+            db_ref = db_or_client.client.get_database(os.getenv("PLI_DB_NAME", "PLI_Leaderboard_v2"))  # type: ignore[attr-defined]
         else:
             return (None, None)
         coll = db_ref.get_collection(os.getenv("ZOHO_USERS_COLL", "Zoho_Users"))
@@ -569,9 +570,9 @@ def _rm_eligible_by_inactive(db_or_client, rm_name: str, month_key: str) -> bool
         # Resolve PLI_Leaderboard.Zoho_Users
         try:
             if hasattr(db_or_client, "get_database"):
-                db_lb = db_or_client.get_database("PLI_Leaderboard")
+                db_lb = db_or_client.get_database(os.getenv("PLI_DB_NAME", "PLI_Leaderboard_v2"))
             elif hasattr(db_or_client, "client"):
-                db_lb = db_or_client.client.get_database("PLI_Leaderboard")  # type: ignore[attr-defined]
+                db_lb = db_or_client.client.get_database(os.getenv("PLI_DB_NAME", "PLI_Leaderboard_v2"))  # type: ignore[attr-defined]
             else:
                 _INACTIVE_ELIGIBILITY_CACHE[cache_key] = True
                 return True
@@ -678,6 +679,124 @@ def _tier_from_points(total_points: float) -> str:
     return "T0"
 
 
+def _resolve_weight_for_scheme(scheme_name: str, txn_date: datetime) -> float:
+    """
+    Search DEFAULT_WEIGHTS['scheme_rules'] for a match with scheme_name and txn_date.
+    Returns weight multiplier (e.g. 1.0 for 100%, 0.5 for 50%, 1.5 for 150%).
+    """
+    if not scheme_name or not DEFAULT_WEIGHTS.get("scheme_rules"):
+        return 1.0
+
+    scheme_name_upper = str(scheme_name).strip().upper()
+
+    for rule in DEFAULT_WEIGHTS["scheme_rules"]:
+        keyword = str(rule.get("keyword", "")).strip().upper()
+        if not keyword:
+            continue
+
+        match_type = str(rule.get("match_type", "contains")).lower()
+        matched = False
+
+        if match_type == "exact":
+            matched = (scheme_name_upper == keyword)
+        elif match_type == "startswith":
+            matched = scheme_name_upper.startswith(keyword)
+        else:  # default: contains
+            matched = (keyword in scheme_name_upper)
+
+        if matched:
+            # Check date bounds if any
+            start = rule.get("start_date")
+            end = rule.get("end_date")
+
+            # Parse dates properly for comparison
+            # Normalize txn_date to date-only for comparison
+            txn_date_only = txn_date.date() if hasattr(txn_date, 'date') else txn_date
+
+            def parse_date_flexible(date_val):
+                """
+                Parse multiple date formats:
+                - 'YYYY-MM-DD' (e.g., '2025-12-01')
+                - 'Month YYYY' (e.g., 'December 2025')
+                - 'Month YY' (e.g., 'December 25')
+                - datetime/date objects
+                Returns the first day of the month as a date object.
+                """
+                if not date_val:
+                    return None
+
+                if isinstance(date_val, str):
+                    date_str = date_val.strip()
+
+                    # Try YYYY-MM-DD format first
+                    try:
+                        return datetime.strptime(date_str, "%Y-%m-%d").date()
+                    except ValueError:
+                        pass
+
+                    # Try 'Month YYYY' format (e.g., 'December 2025')
+                    try:
+                        return datetime.strptime(date_str, "%B %Y").date()
+                    except ValueError:
+                        pass
+
+                    # Try 'Month YY' format (e.g., 'December 25')
+                    try:
+                        parsed = datetime.strptime(date_str, "%B %y").date()
+                        # Ensure it's in 2000s (not 1900s)
+                        if parsed.year < 2000:
+                            parsed = parsed.replace(year=parsed.year + 100)
+                        return parsed
+                    except ValueError:
+                        pass
+
+                    # Try 'Mon YYYY' format (e.g., 'Dec 2025')
+                    try:
+                        return datetime.strptime(date_str, "%b %Y").date()
+                    except ValueError:
+                        pass
+
+                    # Try 'Mon YY' format (e.g., 'Dec 25')
+                    try:
+                        parsed = datetime.strptime(date_str, "%b %y").date()
+                        if parsed.year < 2000:
+                            parsed = parsed.replace(year=parsed.year + 100)
+                        return parsed
+                    except ValueError:
+                        pass
+
+                    return None
+
+                elif hasattr(date_val, 'date'):
+                    return date_val.date()
+                elif hasattr(date_val, 'year'):  # Already a date object
+                    return date_val
+
+                return None
+
+            if start:
+                start_parsed = parse_date_flexible(start)
+                if start_parsed and txn_date_only < start_parsed:
+                    continue
+
+            if end:
+                end_parsed = parse_date_flexible(end)
+                if end_parsed:
+                    # For end dates, we want to include the entire month
+                    # So if end is "December 2025", it should include all of December
+                    # We'll use the last day of the month
+                    from calendar import monthrange
+                    last_day = monthrange(end_parsed.year, end_parsed.month)[1]
+                    end_date_inclusive = end_parsed.replace(day=last_day)
+                    if txn_date_only > end_date_inclusive:
+                        continue
+
+            # Rule matches
+            return float(rule.get("weight_pct", 100.0)) / 100.0
+
+    return 1.0
+
+
 # --- SIP schema + runtime config bootstrap (Mongo-driven, no logic change) ---
 
 
@@ -700,7 +819,7 @@ def _default_schema_doc(schema_id: str) -> dict:
             "tier_thresholds": TIER_THRESHOLDS,
             "tier_monthly_factors": TIER_MONTHLY_FACTORS,
             "sip_points_coeff": SIP_POINTS_COEFF,
-            "lumpsum_points_coeff": LUMPSUM_POINTS_COEFF,
+            # "lumpsum_points_coeff": LUMPSUM_POINTS_COEFF, # Removed
             # SIP/SWP behaviour + horizon defaults (documented for introspection)
             "sip_net_mode_default": SIP_NET_MODE_DEFAULT,
             "sip_include_swp_in_net_default": SIP_INCLUDE_SWP_IN_NET_DEFAULT,
@@ -808,7 +927,7 @@ def _default_config_doc(config_id: str) -> dict:
         "tier_factors": TIER_MONTHLY_FACTORS,
         "coefficients": {
             "sip_points_per_rupee": SIP_POINTS_COEFF,
-            "lumpsum_points_per_rupee": LUMPSUM_POINTS_COEFF,
+            # "lumpsum_points_per_rupee": LUMPSUM_POINTS_COEFF, # Removed
         },
         "meta": {
             "module": "SIP_Scorer",
@@ -890,15 +1009,24 @@ def _effective_config_snapshot(cfg: dict | None) -> dict:
     except Exception:
         ls_gate_min_rupees = float(SIP_LS_GATE_MIN_RUPEES_DEFAULT)
 
-    # --- SIP / SWP behaviour knobs ---
-    # sip_net_mode: "sip_only" (default) or "sip_plus_swp" (include SWP in Net SIP)
-    sip_net_mode = (opts_raw.get("sip_net_mode") or "sip_only").strip().lower()
+    # --- SIP / SWP behaviour knobs (Shim for UI/Legacy mismatch) ---
+    # UI sends 'net_mode', Legacy expects 'sip_net_mode' (prefer UI when both exist)
+    net_mode_val = opts_raw.get("net_mode")
+    if net_mode_val is None:
+        net_mode_val = opts_raw.get("sip_net_mode")
+    sip_net_mode = (net_mode_val or "sip_only").strip().lower()
     if sip_net_mode not in {"sip_only", "sip_plus_swp"}:
         sip_net_mode = "sip_only"
 
-    # Boolean mirror for BI / QA; by default it follows sip_net_mode
+    # Boolean mirror for BI / QA
+    # UI sends 'include_swp', Legacy expects 'sip_include_swp_in_net' (prefer UI when both exist)
+    include_swp_val = opts_raw.get("include_swp")
+    if include_swp_val is None:
+        include_swp_val = opts_raw.get("sip_include_swp_in_net")
+
+    # Default fallback logic
     sip_include_swp_in_net = bool(
-        opts_raw.get("sip_include_swp_in_net", sip_net_mode == "sip_plus_swp")
+        include_swp_val if include_swp_val is not None else (sip_net_mode == "sip_plus_swp")
     )
 
     # SWP weights: Registration reduces net SIP; Cancellation increases it.
@@ -916,9 +1044,10 @@ def _effective_config_snapshot(cfg: dict | None) -> dict:
         "cancellation": swp_cancel,
     }
 
-    # Horizon in months for converting SIP_rate_bps to points (e.g. 24 = 2 years)
+    # Horizon in months (Shim: 'sip_horizon_months' vs 'horizon_months')
     try:
-        sip_horizon_months = int(opts_raw.get("sip_horizon_months", 24))
+        hor_val = opts_raw.get("sip_horizon_months") or opts_raw.get("horizon_months")
+        sip_horizon_months = int(hor_val or 24)
     except Exception:
         sip_horizon_months = 24
 
@@ -940,7 +1069,10 @@ def _effective_config_snapshot(cfg: dict | None) -> dict:
         "tier_thresholds": cfg.get("tier_thresholds", TIER_THRESHOLDS),
         "tier_monthly_factors": cfg.get("tier_monthly_factors", TIER_MONTHLY_FACTORS),
         "sip_points_coeff": cfg.get("sip_points_coeff", SIP_POINTS_COEFF),
-        "lumpsum_points_coeff": cfg.get("lumpsum_points_coeff", LUMPSUM_POINTS_COEFF),
+        # FIXED: Return full config sections for Admin visibility
+        "bonus_slabs": cfg.get("bonus_slabs", {}),
+        "sip_penalty": cfg.get("sip_penalty", {}),
+        "weights": cfg.get("weights", {}),
     }
 
 
@@ -953,7 +1085,7 @@ def _get_mongo_client(mongo_uri: Optional[str] = None):
     global _GLOBAL_MONGO_CLIENT
 
     if mongo_uri is None:
-        mongo_uri = get_secret("MONGODB_CONNECTION_STRING")
+        mongo_uri = get_secret("MongoDb-Connection-String")
     if not mongo_uri:
         logging.error("MongoDB connection string not found in Key Vault or environment.")
         raise RuntimeError("Missing MongoDB connection string")
@@ -975,10 +1107,23 @@ def _load_runtime_config(client) -> tuple[dict, dict, str]:
     stable config hash for stamping/audit. This mirrors the Lumpsum scorer
     policy of Mongo-driven options.
     """
-    db_lb = client.get_database("PLI_Leaderboard")
+    db_lb = client.get_database(os.getenv("PLI_DB_NAME", "PLI_Leaderboard_v2"))
     _ensure_schema_bootstrap(db_lb)
-    cfg = _ensure_config_bootstrap(db_lb) or {}
+    # Discard return value of bootstrap (unsafe read)
+    _ensure_config_bootstrap(db_lb)
+
+    # Explicit safe read
+    coll_name = os.getenv(SIP_CONFIG_COLL_ENV, SIP_CONFIG_DEFAULT_COLL).strip()
+    doc_id = os.getenv(SIP_CONFIG_ID_ENV, SIP_CONFIG_DEFAULT_ID).strip()
+    doc = db_lb[coll_name].find_one({"_id": doc_id}) or {}
+
+    # CRITICAL FIX: The Settings API saves the actual config inside a "config" key
+    # Handle both flat and nested structures robustly
+    cfg = doc.get("config") if (doc.get("config") and isinstance(doc.get("config"), dict)) else doc
+
+    print(f"DEBUG: Loaded cfg from {coll_name}/{doc_id}: {json.dumps(cfg, default=str)}")
     snapshot = _effective_config_snapshot(cfg)
+    print(f"DEBUG: effective_snapshot: {json.dumps(snapshot, default=str)}")
     cfg_hash = hashlib.md5(
         json.dumps(snapshot, sort_keys=True, default=str).encode("utf-8")
     ).hexdigest()
@@ -986,9 +1131,33 @@ def _load_runtime_config(client) -> tuple[dict, dict, str]:
     global _SIP_LAST_CFG_HASH
     _SIP_LAST_CFG_HASH = cfg_hash
 
+    unique_threshold = snapshot.get("unique_sip_threshold", 500.0)
+
+    # [NEW] Load Ignored RMs from Config
+    ignored_list = snapshot.get("ignored_rms")
+    if ignored_list and isinstance(ignored_list, list):
+        # Update global SKIP_RM_ALIASES with config values
+        for rm in ignored_list:
+            if rm:
+                SKIP_RM_ALIASES.add(str(rm).lower().strip())
+        logger.info(f"Updated SKIP_RM_ALIASES with {len(ignored_list)} RMs from config, total: {len(SKIP_RM_ALIASES)}")
+
     opts = snapshot.get("options", {}) or {}
 
-    global TIER_THRESHOLDS, TIER_MONTHLY_FACTORS, SIP_POINTS_COEFF, LUMPSUM_POINTS_COEFF, BONUS_SLABS_RATIO, BONUS_SLABS_ABS, BONUS_SLABS_AVG, PENALTY_SLABS, PENALTY_ENABLED, DEFAULT_WEIGHTS, SIP_NET_MODE, SIP_INCLUDE_SWP_IN_NET, SWP_WEIGHTS, SIP_RANGE_MODE_DEFAULT, SIP_FY_MODE_DEFAULT, SIP_HORIZON_MONTHS, SIP_LS_GATE_PCT, SIP_LS_GATE_MIN_RUPEES
+    # Helper for robust float conversion
+    def _safe_float(v):
+        if isinstance(v, dict) and "$numberDouble" in v:
+            val = v["$numberDouble"]
+            if val == "-Infinity": return -float('inf')
+            if val == "Infinity": return float('inf')
+            try: return float(val)
+            except: return 0.0
+        try:
+            return float(v)
+        except:
+            return 0.0
+
+    global TIER_THRESHOLDS, TIER_MONTHLY_FACTORS, SIP_POINTS_COEFF, BONUS_SLABS_RATIO, BONUS_SLABS_ABS, BONUS_SLABS_AVG, BONUS_SLABS_CONSISTENCY, PENALTY_SLABS, PENALTY_ENABLED, DEFAULT_WEIGHTS, SIP_NET_MODE, SIP_INCLUDE_SWP_IN_NET, SWP_WEIGHTS, SIP_RANGE_MODE_DEFAULT, SIP_FY_MODE_DEFAULT, SIP_HORIZON_MONTHS, SIP_LS_GATE_PCT, SIP_LS_GATE_MIN_RUPEES
 
     # --- 0. Update Scheme Weights (Whitelist/Blacklist) ---
     weights_bg = snapshot.get("weights", {}) or {}
@@ -1010,6 +1179,19 @@ def _load_runtime_config(client) -> tuple[dict, dict, str]:
         DEFAULT_WEIGHTS["scheme_rules"] = cleaned_rules
         logging.info(f"[SIP Config] Updated DEFAULT_WEIGHTS['scheme_rules']: {len(cleaned_rules)} rules loaded.")
 
+    # Load scheme weight application toggles
+    global SCHEME_WEIGHT_APPLY_TO
+    weights_config = snapshot.get("weights", {})
+    apply_to_config = weights_config.get("apply_to", {})
+    if apply_to_config:
+        SCHEME_WEIGHT_APPLY_TO = {
+            "sip_registration": bool(apply_to_config.get("sip_registration", True)),
+            "sip_cancellation": bool(apply_to_config.get("sip_cancellation", False)),
+            "swp_registration": bool(apply_to_config.get("swp_registration", False)),
+            "swp_cancellation": bool(apply_to_config.get("swp_cancellation", False)),
+        }
+        logging.info(f"[SIP Config] Scheme weight apply_to: {SCHEME_WEIGHT_APPLY_TO}")
+
     # 1. Update Tier Thresholds (ListConfig -> Tuples)
     # Expected format: [{"tier": "T6", "min_val": 60000}, ...]
     thresh_raw = snapshot.get("tier_thresholds")
@@ -1020,10 +1202,10 @@ def _load_runtime_config(client) -> tuple[dict, dict, str]:
                 t_name = item.get("tier")
                 t_val = item.get("min_val")
                 if t_name and t_val is not None:
-                     parsed.append((str(t_name), float(t_val)))
+                     parsed.append((str(t_name), _safe_float(t_val)))
             elif isinstance(item, (list, tuple)) and len(item) == 2:
                 # Backward compat for list of lists
-                parsed.append((str(item[0]), float(item[1])))
+                parsed.append((str(item[0]), _safe_float(item[1])))
 
         if parsed:
             # Sort descending by value is CRITICAL for _tier_from_points logic
@@ -1037,7 +1219,7 @@ def _load_runtime_config(client) -> tuple[dict, dict, str]:
         new_factors = {}
         for k, v in factors_raw.items():
             try:
-                new_factors[str(k)] = float(v)
+                new_factors[str(k)] = _safe_float(v)
             except:
                 pass
         if new_factors:
@@ -1049,41 +1231,105 @@ def _load_runtime_config(client) -> tuple[dict, dict, str]:
     # Ratio slabs
     ratio_list = bonus_slabs.get("sip_to_aum")
     if ratio_list and len(ratio_list) > 0:
-        BONUS_SLABS_RATIO = [(float(s["val"]), float(s["bps"])) for s in ratio_list if isinstance(s, dict)]
+        BONUS_SLABS_RATIO = [(_safe_float(s["val"]), _safe_float(s["bps"])) for s in ratio_list if isinstance(s, dict)]
         BONUS_SLABS_RATIO.sort(key=lambda x: x[0], reverse=True)
+    else:
+        BONUS_SLABS_RATIO = []
 
     # Absolute amount slabs
     abs_list = bonus_slabs.get("absolute_sip")
     if abs_list and len(abs_list) > 0:
-        BONUS_SLABS_ABS = [(float(s["val"]), float(s["bps"])) for s in abs_list if isinstance(s, dict)]
+        BONUS_SLABS_ABS = [(_safe_float(s["val"]), _safe_float(s["bps"])) for s in abs_list if isinstance(s, dict)]
         BONUS_SLABS_ABS.sort(key=lambda x: x[0], reverse=True)
+    else:
+        BONUS_SLABS_ABS = []
 
     # Average ticket slabs
     avg_list = bonus_slabs.get("avg_ticket")
     if avg_list and len(avg_list) > 0:
-        BONUS_SLABS_AVG = [(float(s["val"]), float(s["bps"])) for s in avg_list if isinstance(s, dict)]
+        BONUS_SLABS_AVG = [(_safe_float(s["val"]), _safe_float(s["bps"])) for s in avg_list if isinstance(s, dict)]
         BONUS_SLABS_AVG.sort(key=lambda x: x[0], reverse=True)
+    else:
+        BONUS_SLABS_AVG = []
+
+    # Consistency slabs
+    cons_list = bonus_slabs.get("consistency")
+    if cons_list and len(cons_list) > 0:
+        # Expected: {min_months, min_ratio, min_amount, bps}
+        # Validate and store
+        cleaned = []
+        for s in cons_list:
+             if isinstance(s, dict):
+                 cleaned.append({
+                     "min_months": int(s.get("min_months", 0)),
+                     "min_ratio": _safe_float(s.get("min_ratio")),
+                     "min_amount": _safe_float(s.get("min_amount")),
+                     "bps": _safe_float(s.get("bps"))
+                 })
+        # Sort by min_months descending, then bps desc
+        cleaned.sort(key=lambda x: (x["min_months"], x["bps"]), reverse=True)
+        BONUS_SLABS_CONSISTENCY = cleaned
+    else:
+        BONUS_SLABS_CONSISTENCY = []
 
     # Parse and sort penalty slabs
     penalty_cfg = snapshot.get("sip_penalty") or {}
     PENALTY_ENABLED = bool(penalty_cfg.get("enable", True))
     penalty_list = penalty_cfg.get("slabs") or []
-    PENALTY_SLABS = [(float(s["max_loss"]), float(s["rate_bps"])) for s in penalty_list if isinstance(s, dict)]
-    PENALTY_SLABS.sort(key=lambda x: x[0])  # Sort ascending by max_loss threshold
+    cleaned_penalties = []
+    for s in penalty_list:
+        if isinstance(s, dict):
+            cleaned_penalties.append({
+                "threshold_amount": _safe_float(s.get("threshold_amount") or s.get("max_loss")), # max_loss for backwards compat
+                "threshold_ratio": _safe_float(s.get("threshold_ratio") or s.get("max_ratio")),
+                "rate_bps": _safe_float(s.get("rate_bps"))
+            })
+    # Sort by BPS descending to ensure we check the most severe penalties first
+    cleaned_penalties.sort(key=lambda x: x["rate_bps"], reverse=True)
+    PENALTY_SLABS = cleaned_penalties
 
     # 3. Update Coefficients
-    coeffs_raw = snapshot.get("coefficients") or {}
+    coeffs_raw = cfg.get("coefficients") or {}
     # Legacy fallbacks keys
     s_coeff = coeffs_raw.get("sip_points_per_rupee") or snapshot.get("sip_points_coeff")
-    l_coeff = coeffs_raw.get("lumpsum_points_per_rupee") or snapshot.get("lumpsum_points_coeff")
 
-    if s_coeff is not None:
+    # New: explicit base BPS override (User Preference)
+    s_base_bps = coeffs_raw.get("sip_base_bps")
+
+    global SIP_POINTS_COEFF, SIP_BASE_BPS
+    if s_base_bps is not None:
+        try:
+            SIP_BASE_BPS = float(s_base_bps)
+            # Reverse-calculate coeff for consistency/logging if needed, though Base BPS is now authority
+            if SIP_HORIZON_MONTHS > 0:
+                SIP_POINTS_COEFF = (SIP_BASE_BPS * SIP_HORIZON_MONTHS) / 10000.0
+            else:
+                SIP_POINTS_COEFF = 0.0
+        except Exception:
+             SIP_BASE_BPS = 0.0
+    elif s_coeff is not None:
+        # Legacy path: Derive Base BPS from Coefficient
         SIP_POINTS_COEFF = float(s_coeff)
+        if SIP_HORIZON_MONTHS > 0:
+            SIP_BASE_BPS = (SIP_POINTS_COEFF * 10000.0) / float(SIP_HORIZON_MONTHS)
+        else:
+            SIP_BASE_BPS = 0.0
+    else:
+        # Fallback default
+        if SIP_HORIZON_MONTHS > 0 and SIP_POINTS_COEFF > 0:
+             SIP_BASE_BPS = (SIP_POINTS_COEFF * 10000.0) / float(SIP_HORIZON_MONTHS)
+        else:
+             SIP_BASE_BPS = 0.0
 
-    explicit_ls_coeff = False
-    if l_coeff is not None:
-        LUMPSUM_POINTS_COEFF = float(l_coeff)
-        explicit_ls_coeff = True
+    global SIP_HATTRICK_BPS
+    # Legacy hattrick support removed, relying on slabs
+    # try:
+    #     SIP_HATTRICK_BPS = float(coeffs_raw.get("sip_hattrick_bps", 1.0))
+    # except:
+    #     SIP_HATTRICK_BPS = 1.0
+
+    l_coeff = None # Removed Lumpsum Points Coefficient support.
+
 
     SIP_RANGE_MODE_DEFAULT = (
         (opts.get("range_mode") or SIP_RANGE_MODE_DEFAULT or "month").strip().lower()
@@ -1119,14 +1365,9 @@ def _load_runtime_config(client) -> tuple[dict, dict, str]:
         SIP_HORIZON_MONTHS = SIP_HORIZON_MONTHS_DEFAULT
 
     # Only look up legacy Lumpsum coeff if NOT explicitly configured in SIP config
-    if not explicit_ls_coeff:
-        try:
-            _resolve_lumpsum_points_coeff(client)
-        except Exception as e:
-            logging.warning(
-                "[SIP Config] Falling back to default LUMPSUM_POINTS_COEFF due to error: %s",
-                e,
-            )
+
+
+    print(f"DEBUG: Loaded SIP_POINTS_COEFF = {SIP_POINTS_COEFF}")
 
     log_kv(
         logging.INFO,
@@ -1139,7 +1380,8 @@ def _load_runtime_config(client) -> tuple[dict, dict, str]:
         SIP_INCLUDE_SWP_IN_NET=SIP_INCLUDE_SWP_IN_NET,
         SWP_WEIGHTS=SWP_WEIGHTS,
         sip_points_coeff=SIP_POINTS_COEFF,
-        lumpsum_points_coeff=LUMPSUM_POINTS_COEFF
+        sip_base_bps=SIP_BASE_BPS,
+        sip_horizon_months=SIP_HORIZON_MONTHS
     )
 
     return cfg, snapshot, cfg_hash
@@ -1208,6 +1450,7 @@ def BuildTxnDF(
         "updatedAt": 1,
         "createdAt": 1,
         "registrantEmail": 1,
+        "schemeName": 1,
     }
 
     # --- WITH FRACTIONS ---
@@ -1256,12 +1499,40 @@ def BuildTxnDF(
                 or (d.get("reconciliation") or {}).get("reconciledAt")
                 or d.get("reconciledAt")
             )
+            pure_amt = fr.get("fractionAmount", 0) or 0
+            scheme = d.get("schemeName") or ""
+            txn_type = d.get("transactionType")
+            txn_for = d.get("transactionFor")
+
+            # Determine if scheme weight should apply based on toggles
+            apply_weight = False
+            txn_type_upper = str(txn_type).upper()
+            txn_for_upper = str(txn_for).upper()
+
+            if txn_type_upper == "SIP" and txn_for_upper == "REGISTRATION":
+                apply_weight = SCHEME_WEIGHT_APPLY_TO.get("sip_registration", True)
+            elif txn_type_upper == "SIP" and txn_for_upper == "CANCELLATION":
+                apply_weight = SCHEME_WEIGHT_APPLY_TO.get("sip_cancellation", False)
+            elif txn_type_upper == "SWP" and txn_for_upper == "REGISTRATION":
+                apply_weight = SCHEME_WEIGHT_APPLY_TO.get("swp_registration", False)
+            elif txn_type_upper == "SWP" and txn_for_upper == "CANCELLATION":
+                apply_weight = SCHEME_WEIGHT_APPLY_TO.get("swp_cancellation", False)
+
+            weight = 1.0
+            if apply_weight:
+                weight = _resolve_weight_for_scheme(scheme, exec_dt)
+
+            amt_weighted = float(pure_amt) * weight
+
             rows.append(
                 {
                     "date": exec_dt,
-                    "amount": fr.get("fractionAmount", 0) or 0,
-                    "txn_type": d.get("transactionType"),
-                    "txn_for": d.get("transactionFor"),
+                    "amount": amt_weighted,
+                    "amount_raw": float(pure_amt),  # Unweighted amount for audit
+                    "scheme_name": scheme,
+                    "weight": weight,
+                    "txn_type": txn_type,
+                    "txn_for": txn_for,
                     "reconcile_status": recon,
                     "reconcile_at": reconcile_at_val,
                     "rm_name": rm_name,
@@ -1306,12 +1577,40 @@ def BuildTxnDF(
         if require_reconciled and str(recon or "").upper() not in RECON_OK:
             continue
         rr = (d.get("relationshipManager") or d.get("serviceManager") or "").strip()
+        pure_amt = d.get("amount", 0) or 0
+        scheme = d.get("schemeName") or ""
+        txn_type = d.get("transactionType")
+        txn_for = d.get("transactionFor")
+
+        # Determine if scheme weight should apply based on toggles
+        apply_weight = False
+        txn_type_upper = str(txn_type).upper()
+        txn_for_upper = str(txn_for).upper()
+
+        if txn_type_upper == "SIP" and txn_for_upper == "REGISTRATION":
+            apply_weight = SCHEME_WEIGHT_APPLY_TO.get("sip_registration", True)
+        elif txn_type_upper == "SIP" and txn_for_upper == "CANCELLATION":
+            apply_weight = SCHEME_WEIGHT_APPLY_TO.get("sip_cancellation", False)
+        elif txn_type_upper == "SWP" and txn_for_upper == "REGISTRATION":
+            apply_weight = SCHEME_WEIGHT_APPLY_TO.get("swp_registration", False)
+        elif txn_type_upper == "SWP" and txn_for_upper == "CANCELLATION":
+            apply_weight = SCHEME_WEIGHT_APPLY_TO.get("swp_cancellation", False)
+
+        weight = 1.0
+        if apply_weight:
+            weight = _resolve_weight_for_scheme(scheme, eff)
+
+        amt_weighted = float(pure_amt) * weight
+
         rows.append(
             {
                 "date": eff,
-                "amount": d.get("amount", 0) or 0,
-                "txn_type": d.get("transactionType"),
-                "txn_for": d.get("transactionFor"),
+                "amount": amt_weighted,
+                "amount_raw": float(pure_amt),  # Unweighted amount for audit
+                "scheme_name": scheme,
+                "weight": weight,
+                "txn_type": txn_type,
+                "txn_for": txn_for,
                 "reconcile_status": recon,
                 "reconcile_at": (
                     (d.get("reconciliation") or {}).get("reconciledAt") or d.get("reconciledAt")
@@ -1332,6 +1631,8 @@ def BuildTxnDF(
             columns=[
                 "date",
                 "amount",
+                "scheme_name",
+                "weight",
                 "txn_type",
                 "txn_for",
                 "reconcile_status",
@@ -1448,27 +1749,7 @@ def MonthlyRollups(df_all: "DataFrame", db_or_client) -> "DataFrame":
     df_swp = df[df["txn_type"] == "SWP"].copy()
 
     if df_sip.empty and (not SIP_INCLUDE_SWP_IN_NET or df_swp.empty):
-        return pd.DataFrame(
-            columns=[
-                "month",
-                "rm_name",
-                "employee_name",
-                "Net SIP",
-                "Gross SIP",
-                "Cancel SIP",
-                "Avg SIP",
-                "SIP to AUM %",
-                "Lumpsum Net",
-                "SIP Rate (bps)",
-                "SIP Points",
-                "Lumpsum Points",
-                "Total Points",
-                "Tier",
-            ]
-        )
-
-    if df_sip.empty:
-        # If we have only SWP and the config says not to net SWP into SIP, nothing to score.
+        # If we have only SWP and config says not to net SWP into SIP, nothing to score.
         return pd.DataFrame(
             columns=[
                 "month",
@@ -1492,10 +1773,78 @@ def MonthlyRollups(df_all: "DataFrame", db_or_client) -> "DataFrame":
     sign_map = {"REGISTRATION": 1.0, "CANCELLATION": -1.0}
     df_sip.loc[:, "_sign"] = df_sip["txn_for"].map(sign_map).fillna(0.0)
 
+    # Pre-fetch streaks for consistency bonus (Streak logic)
+    # Map: month ("YYYY-MM") -> { rm_name_lower: streak_count }
+    streak_cache = {}
+    try:
+        key_df = df_sip[["rm_name", "month"]].copy()
+        if SIP_INCLUDE_SWP_IN_NET and not df_swp.empty:
+            key_df = pd.concat([key_df, df_swp[["rm_name", "month"]]], ignore_index=True)
+        unique_months = sorted(key_df["month"].dropna().unique())
+        if unique_months:
+            # Resolve DB once
+            _db_qs = None
+            if hasattr(db_or_client, "get_database"):
+                _db_qs = db_or_client.get_database(os.getenv("PLI_DB_NAME", "PLI_Leaderboard_v2"))
+            elif hasattr(db_or_client, "client"):
+                 # type: ignore
+                _db_qs = db_or_client.client[os.getenv("PLI_DB_NAME", "PLI_Leaderboard_v2")]
+
+            if _db_qs is not None:
+                for m_str in unique_months:
+                    try:
+                        y, m_num = m_str.split("-")
+                        dt_curr = datetime(int(y), int(m_num), 1)
+                        # Previous month
+                        if m_num == "01" or m_num == "1" or int(m_num) == 1:
+                            dt_prev = datetime(int(y) - 1, 12, 1)
+                        else:
+                            dt_prev = datetime(int(y), int(m_num) - 1, 1)
+                        prev_m_str = dt_prev.strftime("%Y-%m")
+
+                        # Populate cache for this month's lookback
+                        streak_cache[m_str] = {}
+
+                        # Fetch all RMs for previous month
+                        # Projection: rm_name, consecutive_positive_months
+                        for doc in _db_qs["MF_SIP_Leaderboard"].find(
+                            {"month": prev_m_str},
+                            {"rm_name": 1, "consecutive_positive_months": 1}
+                        ):
+                            r_name = doc.get("rm_name")
+                            if r_name:
+                                streak_cache[m_str][str(r_name).lower().strip()] = int(doc.get("consecutive_positive_months") or 0)
+                    except Exception as e_inner:
+                        logging.warning(f"[StreakFetch] Failed for month {m_str}: {e_inner}")
+
+    except Exception as e_streak:
+        logging.warning(f"[StreakFetch] Global failure: {e_streak}")
+
     buckets: list[dict[str, Any]] = []
 
-    # Group by RM + month
-    for (rm_name, month), g in df_sip.groupby(["rm_name", "month"], sort=False):
+    key_df = df_sip[["rm_name", "month"]].copy()
+    if SIP_INCLUDE_SWP_IN_NET and not df_swp.empty:
+        key_df = pd.concat([key_df, df_swp[["rm_name", "month"]]], ignore_index=True)
+    key_df = key_df.drop_duplicates()
+    sip_groups = {
+        (rm, month): g for (rm, month), g in df_sip.groupby(["rm_name", "month"], sort=True)
+    }
+    swp_groups = (
+        {(rm, month): g for (rm, month), g in df_swp.groupby(["rm_name", "month"], sort=True)}
+        if not df_swp.empty
+        else {}
+    )
+    group_keys = list(sip_groups.keys())
+    # Always process SWP keys so we can report SWP stats even if not netting
+    for key in swp_groups.keys():
+        if key not in sip_groups:
+            group_keys.append(key)
+    group_keys.sort()
+    empty_sip = df_sip.head(0)
+
+    # Group by RM + month (sorted for streak propagation)
+    for rm_name, month in group_keys:
+        g = sip_groups.get((rm_name, month), empty_sip)
         # Inactive gating: apply 6-month rule using Zoho_Users status/inactive_since.
         # If not eligible for this month, skip building any SIP bucket for this RM/month.
         try:
@@ -1582,12 +1931,42 @@ def MonthlyRollups(df_all: "DataFrame", db_or_client) -> "DataFrame":
         except Exception:
             sip_to_aum = 0.0
 
+        # Consistency Streak
+        prev_streak = 0
+        try:
+             # streak_cache keys are strings
+             prev_streak = streak_cache.get(str(month), {}).get(str(rm_name).lower().strip(), 0)
+        except:
+             pass
+
+        # Increment if positive Net SIP, else reset
+        if net_sip > 0:
+            curr_streak = prev_streak + 1
+        else:
+            curr_streak = 0
+
+        # Propagate streak to next month in memory (for robust batch/re-aggregation runs)
+        try:
+            y_str, m_str_n = month.split("-")
+            y_val, m_val = int(y_str), int(m_str_n)
+            if m_val == 12:
+                next_m = f"{y_val + 1}-01"
+            else:
+                next_m = f"{y_val}-{m_val + 1:02d}"
+
+            if next_m not in streak_cache:
+                streak_cache[next_m] = {}
+            streak_cache[next_m][str(rm_name).lower().strip()] = curr_streak
+        except Exception:
+            pass
+
+
         # SIP incentive computation
         inc = _compute_sip_incentive(
             net_sip=net_sip,
             sip_to_aum=sip_to_aum,
             avg_sip=avg_sip,
-            consec_positive_months=None,
+            consec_positive_months=curr_streak,
             horizon_months=SIP_HORIZON_MONTHS,
         )
         sip_points = float(inc.get("points") or 0.0)
@@ -1597,13 +1976,22 @@ def MonthlyRollups(df_all: "DataFrame", db_or_client) -> "DataFrame":
         sip_rate_capped = inc.get("rate_capped")
         sip_rate_cap_reason = inc.get("cap_reason")
 
-        # If Lumpsum gate is triggered, SIP points are zeroed out
-        if gate.get("applied"):
+        # If Lumpsum gate is triggered, POSITIVE SIP points are zeroed out.
+        # Penalties (negative points) must persist.
+        if gate.get("applied") and sip_points > 0:
             sip_points = 0.0
 
-        # Lumpsum points: signed contribution from Net Lumpsum (positive or negative)
+        # Lumpsum points: NP × rate (from Lumpsum_Scorer's growth slabs)
+        # Rate is determined by NP:AUM growth % via Lumpsum rate_slabs
         try:
-            ls_points = float(ls_net) * float(LUMPSUM_POINTS_COEFF)
+            ls_rate = float(gate.get("ls_rate_used") or 0.0)
+            if ls_rate > 0:
+                # Use rate from Lumpsum_Scorer (e.g., 0.0015 for 71% growth)
+                ls_points = float(ls_net) * ls_rate
+            else:
+                # No fallback - Lumpsum Scorer is sole authority.
+                ls_points = 0.0
+
             # Cap negative lumpsum points to -5000 (Max Penalty) to allow negatives but prevent unbounded drag
             # User Feedback: "should give negative points... but with capping"
             ls_points = max(-5000.0, ls_points)
@@ -1612,6 +2000,48 @@ def MonthlyRollups(df_all: "DataFrame", db_or_client) -> "DataFrame":
 
         total_points = sip_points + ls_points
         tier = _tier_from_points(total_points)
+
+        # --- Audit Section: Raw Amounts & Scheme Bonus ---
+        # Calculate unweighted amounts for audit trail
+        g_amt_raw = pd.to_numeric(g.get("amount_raw", g["amount"]), errors="coerce").fillna(0.0)
+
+        # Raw aggregates by type
+        gross_sip_raw = float(g_amt_raw[gross_mask].sum())
+        cancel_sip_raw = float(g_amt_raw[cancel_mask].sum())
+        net_sip_raw = float((g_amt_raw * g_sign).sum())
+
+        # SWP raw amounts
+        swp_adj_reg_raw = 0.0
+        swp_adj_cancel_raw = 0.0
+        if SIP_INCLUDE_SWP_IN_NET and not df_swp.empty:
+            swp_key = (df_swp["rm_name"].astype(str).str.strip() == rm_name) & (
+                df_swp["month"].astype(str) == month
+            )
+            swp_rows = df_swp[swp_key]
+            if not swp_rows.empty:
+                swp_rows = swp_rows.copy()
+                swp_rows["txn_for"] = swp_rows["txn_for"].astype(str).str.upper()
+                swp_amt_raw = pd.to_numeric(swp_rows.get("amount_raw", swp_rows["amount"]), errors="coerce").fillna(0.0)
+                swp_reg_mask = swp_rows["txn_for"].eq("REGISTRATION")
+                swp_cancel_mask = swp_rows["txn_for"].eq("CANCELLATION")
+
+                reg_w = float(SWP_WEIGHTS.get("registration", SWP_WEIGHTS_DEFAULT["registration"]))
+                cancel_w = float(SWP_WEIGHTS.get("cancellation", SWP_WEIGHTS_DEFAULT["cancellation"]))
+
+                swp_adj_reg_raw = float((swp_amt_raw[swp_reg_mask] * reg_w).sum())
+                swp_adj_cancel_raw = float((swp_amt_raw[swp_cancel_mask] * cancel_w).sum())
+
+        # Calculate Scheme Bonus (weighted - unweighted)
+        scheme_bonus = (gross_sip - gross_sip_raw) + (cancel_sip_raw - cancel_sip) + (swp_adj_reg - swp_adj_reg_raw) + (swp_adj_cancel - swp_adj_cancel_raw)
+
+        # Build Audit ByType array
+        audit_by_type = [
+            {"type": "SIP Registration", "sum": gross_sip_raw},
+            {"type": "SIP Cancellation", "sum": cancel_sip_raw},
+            {"type": "SWP Registration", "sum": swp_adj_reg_raw},
+            {"type": "SWP Cancellation", "sum": swp_adj_cancel_raw},
+            {"type": "Net SIP", "sum": net_sip_raw + swp_adj_reg_raw + swp_adj_cancel_raw},
+        ]
 
         bucket: dict[str, Any] = {
             "month": month,
@@ -1648,6 +2078,8 @@ def MonthlyRollups(df_all: "DataFrame", db_or_client) -> "DataFrame":
             "sip_rate_components_bps": sip_rate_components,
             "sip_rate_capped": sip_rate_capped,
             "sip_rate_cap_reason": sip_rate_cap_reason,
+            "consecutive_positive_months": curr_streak,
+            "Consecutive Positive Months": curr_streak,
             "SIP Points": sip_points,
             "sip_points": sip_points,
             # Lumpsum + combined points
@@ -1658,6 +2090,11 @@ def MonthlyRollups(df_all: "DataFrame", db_or_client) -> "DataFrame":
             # Final tier
             "Tier": tier,
             "tier": tier,
+            # Audit section
+            "Audit": {
+                "ByType": audit_by_type,
+                "SchemeBonus": scheme_bonus,
+            },
         }
         buckets.append(bucket)
 
@@ -1782,70 +2219,8 @@ def _coerce_float(val: object) -> Optional[float]:
     return None
 
 
-def _resolve_lumpsum_points_coeff(db_or_client) -> float:
-    """
-    Resolve the Lumpsum points coefficient from the Lumpsum leaderboard.
-    Falls back to LUMPSUM_POINTS_COEFF_DEFAULT if nothing explicit is found.
-
-    Priority:
-      1) Explicit coefficient fields on any Leaderboard_Lumpsum row
-      2) Static default (LUMPSUM_POINTS_COEFF_DEFAULT)
-    """
-    global LUMPSUM_POINTS_COEFF
-
-    coeff = LUMPSUM_POINTS_COEFF_DEFAULT
-    try:
-        # Resolve PLI_Leaderboard DB handle
-        if hasattr(db_or_client, "get_database"):
-            db_lb = db_or_client.get_database("PLI_Leaderboard")
-        elif hasattr(db_or_client, "client"):
-            db_lb = db_or_client.client.get_database("PLI_Leaderboard")  # type: ignore[attr-defined]
-        else:
-            return LUMPSUM_POINTS_COEFF
-
-        coll_name = os.getenv("LEADERBOARD_LUMPSUM_COLL", "Leaderboard_Lumpsum")
-        coll = db_lb.get_collection(coll_name)
-
-        # Look for any Lumpsum leaderboard row that carries an explicit coefficient.
-        # Support a few plausible field names and fall back cleanly if none exist.
-        doc = coll.find_one(
-            {"Metric": "Lumpsum"},
-            {
-                "lumpsum_points_coeff": 1,
-                "LumpsumPointsCoeff": 1,
-                "points_coeff": 1,
-                "lumpsum_points_coefficient": 1,
-            },
-        )
-
-        if doc:
-            for key in (
-                "lumpsum_points_coeff",
-                "LumpsumPointsCoeff",
-                "points_coeff",
-                "lumpsum_points_coefficient",
-            ):
-                if key in doc and doc[key] is not None:
-                    coeff = float(doc[key])
-                    break
-    except Exception as e:
-        logging.warning(
-            "[SIP Config] Failed to resolve Lumpsum points coeff from leaderboard: %s",
-            e,
-        )
-        coeff = LUMPSUM_POINTS_COEFF_DEFAULT
-
-    LUMPSUM_POINTS_COEFF = coeff
-    try:
-        log_kv(
-            logging.INFO,
-            "[SIP Config] Effective Lumpsum points coeff",
-            coeff=LUMPSUM_POINTS_COEFF,
-        )
-    except Exception:
-        # Logging failure should never block scoring
-        pass
-    return LUMPSUM_POINTS_COEFF
+    # _resolve_lumpsum_points_coeff removed
+    return 0.0
 
 
 # --- SIP Incentive computation (rates in basis points; final capped at [-3, +9] bps) ---
@@ -1900,18 +2275,22 @@ def _compute_sip_incentive(
             }
 
         severity = abs(ns)
-        penalty = -3.0  # Default floor
+        penalty = 0.0
 
-        # Find matching slab (sorted ascending by max_loss)
-        for max_loss, rate_bps in PENALTY_SLABS:
-            if severity <= max_loss:
-                penalty = -float(rate_bps)
+        # Find matching slab (sorted descending by severity/BPS)
+        # Apply "OR" logic: if it crosses EITHER the amount threshold OR the ratio threshold, it triggers the penalty.
+        for s in PENALTY_SLABS:
+            thr_amt = s.get("threshold_amount", 0.0)
+            thr_ratio = s.get("threshold_ratio", 0.0)
+
+            if severity >= thr_amt or (ratio <= thr_ratio and ratio < 0):
+                penalty = -float(s.get("rate_bps", 0.0))
                 break
 
-        # Floor at -3 bps; compute points so negative ns yields a negative payout
-        rate_bps = max(-3.0, penalty)
+        # Respect configured slabs; only floor if no slabs matched and default is needed
+        rate_bps = penalty
         effective_rate = rate_bps / 10000.0
-        cap_reason = "negative_floor_3bps" if penalty < -3.0 else None
+        cap_reason = None
         raw_points = ns * abs(effective_rate)  # ns is negative -> payout negative
         points_scaled = raw_points * float(horizon)
         return {
@@ -1927,8 +2306,9 @@ def _compute_sip_incentive(
             "points": points_scaled,
         }
 
-    # Policy 2025 V1: Base earning rate is 2.0 bps (applied to 24x volume)
-    base_bps = 2.0
+    # Policy 2025 V1: Base earning rate
+    # Use global SIP_BASE_BPS (which is either explicitly configured or derived from legacy coeff for standard horizon)
+    base_bps = float(SIP_BASE_BPS)
 
     # Ratio (SIP/AUM) bonuses
     ratio_bonus = 0.0
@@ -1954,11 +2334,28 @@ def _compute_sip_incentive(
 
     # Consistency bonus (+1 bp if 3+ consecutive positive months) — optional; default off
     cons_bonus = 0.0
-    try:
-        if consec_positive_months is not None and consec_positive_months >= 3:
-            cons_bonus = 1.0
-    except Exception:
-        cons_bonus = 0.0
+    streak = int(consec_positive_months) if consec_positive_months is not None else 0
+    if streak > 0:
+        for s in BONUS_SLABS_CONSISTENCY:
+            # 1. Streak Requirement
+            if streak >= s.get("min_months", 0):
+                # 2. Secondary Criteria (Ratio OR Amount)
+                min_r = s.get("min_ratio", 0.0)
+                min_a = s.get("min_amount", 0.0)
+
+                has_criteria = (min_r > 0) or (min_a > 0)
+
+                if not has_criteria:
+                    # Pure streak bonus
+                    cons_bonus = s.get("bps", 0.0)
+                    break
+                else:
+                    # Must meet at least one configured secondary condition
+                    pass_r = (min_r > 0 and ratio >= min_r)
+                    pass_a = (min_a > 0 and ns >= min_a)
+                    if pass_r or pass_a:
+                        cons_bonus = s.get("bps", 0.0)
+                        break
 
     raw_bps = base_bps + ratio_bonus + amt_bonus + avg_bonus + cons_bonus
     rate_bps = raw_bps  # no artificial positive cap
@@ -1995,7 +2392,7 @@ def _lumpsum_gate_check(
                   threshold_pct, min_rupees, source_coll, match_key.
     """
     try:
-        db = client.get_database("PLI_Leaderboard")
+        db = client.get_database(os.getenv("PLI_DB_NAME", "PLI_Leaderboard"))
         coll_name = os.getenv("LEADERBOARD_LUMPSUM_COLL", "Leaderboard_Lumpsum")
         coll = db.get_collection(coll_name)
 
@@ -2019,12 +2416,14 @@ def _lumpsum_gate_check(
         net = _coerce_float(
             pick(doc, "net_purchase", "Net Purchase (Formula)", "net", "np", "net_purchase_rupees")
         )
+        rate = _coerce_float(pick(doc, "rate_used", "rate"))
 
         if aum is None or aum <= 0:
             return {
                 "applied": False,
                 "reason": "no_aum",
                 "ls_net_purchase": float(net or 0.0),
+                "ls_rate_used": float(rate or 0.0),
                 "source_coll": coll_name,
                 "match_key": ("employee_id" if employee_id else "rm_name"),
             }
@@ -2033,6 +2432,7 @@ def _lumpsum_gate_check(
                 "applied": False,
                 "reason": "no_net_purchase",
                 "ls_aum_start": float(aum or 0.0),
+                "ls_rate_used": float(rate or 0.0),
                 "source_coll": coll_name,
                 "match_key": ("employee_id" if employee_id else "rm_name"),
             }
@@ -2047,6 +2447,7 @@ def _lumpsum_gate_check(
             "ls_growth_pct": float(round(growth_pct, 4)),
             "ls_net_purchase": float(net),
             "ls_aum_start": float(aum),
+            "ls_rate_used": float(rate or 0.0),
             "threshold_pct": float(thr),
             "min_rupees": float(min_amt),
             "source_coll": coll_name,
@@ -2095,7 +2496,7 @@ def AggregateTrailRates(client, month: str) -> tuple[int, float]:
 
     Returns: (trail_upserts_count, vp_points_total).
     """
-    db_lb = client.get_database("PLI_Leaderboard")
+    db_lb = client.get_database(os.getenv("PLI_DB_NAME", "PLI_Leaderboard"))
     coll_sip = db_lb.get_collection("MF_SIP_Leaderboard")
     coll_ls = db_lb.get_collection(os.getenv("LEADERBOARD_LUMPSUM_COLL", "Leaderboard_Lumpsum"))
 
@@ -2369,6 +2770,21 @@ def UpsertMonthlyRollups(client, df_rollups: "DataFrame") -> tuple[int, int]:
                 "rm_name": doc.get("rm_name"),
                 "metrics": {
                     "net_sip": doc.get("Net SIP") if "Net SIP" in doc else doc.get("net_sip"),
+                    # Add the newly calculated values to the metrics dictionary
+                    "net_sip_core": doc.get("net_sip_core"),
+                    "swp_adj_registration": doc.get("swp_adj_registration"),
+                    "swp_adj_cancellation": doc.get("swp_adj_cancellation"),
+                    "swp_net_effect": doc.get("swp_net_effect"),
+                    "net_sip_val": doc.get("net_sip_val"),
+                    "sip_scheme_bonus_val": doc.get("sip_scheme_bonus_val"),
+                    "gross_sip_raw": doc.get("gross_sip_raw"),
+                    "cancel_sip_raw": doc.get("cancel_sip_raw"),
+                    "swp_adj_registration_raw": doc.get("swp_adj_registration_raw"),
+                    "swp_adj_cancellation_raw": doc.get("swp_adj_cancellation_raw"),
+                    "swp_net_effect_raw": doc.get("swp_net_effect_raw"),
+                    "net_sip_raw": doc.get("net_sip_raw"),
+                    "scheme_bonus": doc.get("scheme_bonus"),
+                    # Existing metrics continue below
                     "net_sip_core": (
                         doc.get("Net SIP (Core)")
                         if "Net SIP (Core)" in doc

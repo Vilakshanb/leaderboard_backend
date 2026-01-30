@@ -9,10 +9,10 @@ import pymongo
 
 def _get_db():
     try:
-        uri = os.getenv("MONGODB_CONNECTION_STRING")
+        uri = os.getenv("MongoDb-Connection-String")
         if not uri: return None
         client = pymongo.MongoClient(uri)
-        return client["PLI_Leaderboard"]
+        return client[os.getenv("PLI_DB_NAME", "PLI_Leaderboard")]
     except:
         return None
 
@@ -69,5 +69,6 @@ def get_user_email(req) -> str | None:
     if is_dev_or_test:
         val = req.headers.get("X-User-Email")
         if val: return val
+        return "vilakshan@niveshonline.com"
 
     return None

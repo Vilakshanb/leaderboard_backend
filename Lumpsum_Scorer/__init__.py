@@ -15,9 +15,14 @@ from pymongo.errors import DuplicateKeyError, PyMongoError
 import azure.functions as func
 from pymongo import ReturnDocument
 
+
 import atexit
 from types import SimpleNamespace
 import hashlib
+import os
+
+# --- Database Name ---
+DB_NAME = os.getenv("PLI_DB_NAME") or os.getenv("MONGO_DB_NAME") or "PLI_Leaderboard_v2"
 
 
 # -----------------------------------------------------------------------------
@@ -184,7 +189,7 @@ DEFAULT_WEIGHTS = {
     "cob_out_pct": 120,
     "switch_in_pct": 120,  # Changed from 100 to match Legacy
     "switch_out_pct": 120,  # Changed from 100 to match Legacy
-    "hattrick_bonus": 500,
+    "hattrick_bonus": 5000,
     "hattrick_threshold_pct": 0.1,
     "debt_bonus": {
         "enable": False,  # Changed from True - Legacy doesn't have debt bonus
@@ -196,6 +201,9 @@ DEFAULT_WEIGHTS = {
     # List of { keyword: str, match_type: 'contains'|'exact', weight_pct: float }
     "scheme_rules": [],
 }
+# Defaults for Ignored RMs (initially empty)
+SKIP_RM_ALIASES: set[str] = set()
+
 WEIGHTS = dict(DEFAULT_WEIGHTS)
 
 # --- Runtime config bootstrap (shared Config collection, multi-schema, versioned) ---
@@ -601,25 +609,40 @@ def _init_runtime_config(db_leaderboard, override_cfg: dict | None = None):
         # Ensure schema registry doc exists (Schemas)
         _ensure_schema_bootstrap(db_leaderboard)
         # Ensure a versioned, schema-tagged config document exists (shared Config collection)
-        boot = _ensure_config_bootstrap(db_leaderboard)
+        # We ignore the return value to perform a fresh, consistent find_one below
+        _ensure_config_bootstrap(db_leaderboard)
 
-        cfg = {}
+        # 1. Fetch from DB
+        coll_name = os.getenv("PLI_CONFIG_COLL", CONFIG_DEFAULT_COLL).strip()  # default 'config'
+        doc_id = os.getenv("PLI_CONFIG_ID", CONFIG_DEFAULT_ID).strip()
+        col = db_leaderboard[coll_name]
+
+        # Explicit fetch to ensure we get the full document as verified by inspection tools
+        doc = col.find_one({"_id": doc_id}) or {}
+
+        # CRITICAL FIX: The Settings API saves the actual config inside a "config" key
+        # Handle both flat and nested structures robustly
+        cfg = doc.get("config") if (doc.get("config") and isinstance(doc.get("config"), dict)) else doc
+
+        # 2. Merge overrides if present
         if override_cfg:
-            cfg = override_cfg
-            logging.info("[Config] Using OVERRIDE config for simulation/dry-run.")
-        else:
-            coll_name = os.getenv("PLI_CONFIG_COLL", CONFIG_DEFAULT_COLL).strip()  # default 'config'
-            doc_id = os.getenv("PLI_CONFIG_ID", CONFIG_DEFAULT_ID).strip()
-            col = db_leaderboard[coll_name]
-            cfg = boot if isinstance(boot, dict) else (col.find_one({"_id": doc_id}) or {})
-            # Back-compat read: if not found in 'config', peek legacy 'Config'
-            if not cfg and coll_name == "config":
-                legacy = db_leaderboard["Config"].find_one({"_id": doc_id})  # noqa: N806 (legacy name)
-                if legacy:
-                    cfg = legacy
-                    logging.info(
-                        "[Config] Using legacy doc from 'Config' (read-only). Consider migrating."
-                    )
+            logging.info("[Config] Applying OVERRIDE config on top of DB config.")
+            # Shallow merge for top-level keys
+            # For deeper merging (like 'options'), we might need more logic,
+            # but usually overrides are distinct keys or complete objects.
+            # Assuming 'options' in override replaces 'options' in DB is safer for now
+            # unless we specifically want partial option updates.
+            # Let's do a smart update for specific dicts if needed.
+
+            # Simple recursive update for critical dictionaries
+            for key, val in override_cfg.items():
+                if isinstance(val, dict) and isinstance(cfg.get(key), dict):
+                    # Update sub-dict
+                    cfg[key].update(val)
+                else:
+                    # Overwrite
+                    cfg[key] = val
+
         if cfg:
             # 1) Slabs/templates
             qb = cfg.get("qtr_bonus_template")
@@ -721,6 +744,15 @@ def _init_runtime_config(db_leaderboard, override_cfg: dict | None = None):
                     RUNTIME_OPTIONS["cob_in_correction_factor"] = float(ccf)
                 except Exception:
                     pass
+
+            # [NEW] Load Ignored RMs
+            ign = cfg.get("ignored_rms")
+            if isinstance(ign, list):
+                SKIP_RM_ALIASES.clear()
+                for v in ign:
+                    if v:
+                        SKIP_RM_ALIASES.add(str(v).strip().lower())
+                logging.info("[Config] Updated SKIP_RM_ALIASES: %d entries", len(SKIP_RM_ALIASES))
 
             # 3) Category rules (don't let this kill config if it's buggy)
             try:
@@ -1629,10 +1661,15 @@ def _recompute_lumpsum_breakdown_and_np(rec: dict) -> dict:
         cob_in = float(type_sums.get("cob in", 0.0))
         cob_out = float(type_sums.get("cob out", 0.0))
 
-        switch_in_w = switch_in * 1.20
-        switch_out_w = switch_out * 1.20
-        cob_in_w = cob_in * 0.50
-        cob_out_w = cob_out * 1.20
+        si_pct = float(WEIGHTS.get("switch_in_pct", 120.0))
+        so_pct = float(WEIGHTS.get("switch_out_pct", 120.0))
+        ci_pct = float(WEIGHTS.get("cob_in_pct", 50.0))
+        co_pct = float(WEIGHTS.get("cob_out_pct", 120.0))
+
+        switch_in_w = switch_in * (si_pct / 100.0)
+        switch_out_w = switch_out * (so_pct / 100.0)
+        cob_in_w = cob_in * (ci_pct / 100.0)
+        cob_out_w = cob_out * (co_pct / 100.0)
 
         bd = rec.get("Breakdown")
         if not isinstance(bd, dict):
@@ -1643,14 +1680,26 @@ def _recompute_lumpsum_breakdown_and_np(rec: dict) -> dict:
         subs = bd.get("Subtractions") or {}
         tots = bd.get("Totals") or {}
 
+        # Robustly extract debt bonus (key changes with config, e.g. 20% vs 40%)
+        debt_bonus = 0.0
+        debt_key_used = "Debt Purchase Bonus (+20% if <75%)"  # default fallback
+        # Robustly extract debt/equity/hybrid bonuses
+        # We assume any key containing "Purchase Bonus" is a bonus component
+        extracted_bonuses = {}
         try:
-            debt_bonus = float(adds.get("Debt Purchase Bonus (+20% if <75%)", 0.0) or 0.0)
+            for k, v in adds.items():
+                if "Purchase Bonus" in str(k):
+                    extracted_bonuses[k] = float(v or 0.0)
         except Exception:
-            debt_bonus = 0.0
+            pass
 
-        adds["Total Purchase (100%)"] = round_sig(purchase)
-        adds["Switch In (120%)"] = round_sig(switch_in_w)
-        adds["Change Of Broker In - TICOB (50%)"] = round_sig(cob_in_w)
+        adds["Total Purchase (100%)"] = float(purchase)
+        adds[f"Switch In ({si_pct:.0f}%)"] = float(switch_in_w)
+        adds[f"Change Of Broker In - TICOB ({ci_pct:.0f}%)"] = float(cob_in_w)
+
+        # Re-inject all extracted bonuses
+        for k, v in extracted_bonuses.items():
+            adds[k] = v
 
         blacklisted_sum = 0.0
         bc = audit.get("ByCategory") or []
@@ -1675,38 +1724,38 @@ def _recompute_lumpsum_breakdown_and_np(rec: dict) -> dict:
                     blacklisted_sum += val
         except Exception:
             pass
-        adds["Blacklisted & Liquid Purchase (0%)"] = round_sig(blacklisted_sum)
+        adds["Blacklisted & Liquid Purchase (0%)"] = float(blacklisted_sum)
 
-        subs["Redemption (100%)"] = round_sig(redemption)
-        subs["Switch Out (120%)"] = round_sig(switch_out_w)
-        subs["Change Of Broker Out - TOCOB (120%)"] = round_sig(cob_out_w)
+        subs["Redemption (100%)"] = float(redemption)
+        subs[f"Switch Out ({so_pct:.0f}%)"] = float(switch_out_w)
+        subs[f"Change Of Broker Out - TOCOB ({co_pct:.0f}%)"] = float(cob_out_w)
 
         total_additions = (
             float(adds.get("Total Purchase (100%)", 0.0) or 0.0)
-            + float(adds.get("Switch In (120%)", 0.0) or 0.0)
-            + float(debt_bonus or 0.0)
-            + float(adds.get("Change Of Broker In - TICOB (50%)", 0.0) or 0.0)
+            + switch_in_w
+            + sum(extracted_bonuses.values())
+            + cob_in_w
         )
         total_subtractions = (
             float(subs.get("Redemption (100%)", 0.0) or 0.0)
-            + float(subs.get("Switch Out (120%)", 0.0) or 0.0)
-            + float(subs.get("Change Of Broker Out - TOCOB (120%)", 0.0) or 0.0)
+            + switch_out_w
+            + cob_out_w
         )
 
         np_val = total_additions - total_subtractions
-        np_rounded = round_sig(np_val)
+        np_final = float(np_val)
 
-        # Store rounded totals for additions/subtractions, and the rounded net separately
-        tots["Total Additions"] = round_sig(total_additions)
-        tots["Total Subtractions"] = round_sig(total_subtractions)
-        tots["Net Purchase (Formula)"] = np_rounded
+        # Store totals for additions/subtractions, and the net separately
+        tots["Total Additions"] = float(total_additions)
+        tots["Total Subtractions"] = float(total_subtractions)
+        tots["Net Purchase (Formula)"] = np_final
 
         bd["Additions"] = adds
         bd["Subtractions"] = subs
         bd["Totals"] = tots
         rec["Breakdown"] = bd
-        rec["NetPurchase"] = float(np_rounded)
-        rec["net_purchase"] = float(np_rounded)
+        rec["NetPurchase"] = float(np_final)
+        rec["net_purchase"] = float(np_final)
 
         audit_meta = rec.get("AuditMeta") or {}
         try:
@@ -1795,11 +1844,14 @@ def _recompute_breakdown_and_np(rec: dict) -> dict:
         sub = br.get("Subtractions") or {}
         tots = br.get("Totals") or {}
 
-        # Preserve any pre-computed debt bonus if present
+        # Robustly extract debt/equity/hybrid bonuses
+        extracted_bonuses = {}
         try:
-            debt_bonus = float(add.get("Debt Purchase Bonus (+20% if <75%)", 0.0) or 0.0)
+            for k, v in add.items():
+                if "Purchase Bonus" in str(k):
+                    extracted_bonuses[k] = float(v or 0.0)
         except Exception:
-            debt_bonus = 0.0
+            pass
 
         # Aggregate blacklisted bucket from Audit.ByCategory (0% weight)
         blacklisted_sum = 0.0
@@ -1821,7 +1873,11 @@ def _recompute_breakdown_and_np(rec: dict) -> dict:
         # Rebuild additions with correct weights (dynamic labels)
         add["Total Purchase (100%)"] = float(purchase)
         add[f"Switch In ({float(WEIGHTS.get('switch_in_pct', 100)):.0f}%)"] = float(switch_in_w)
-        add["Debt Purchase Bonus (+20% if <75%)"] = float(debt_bonus)
+
+        # Re-inject all extracted bonuses
+        for k, v in extracted_bonuses.items():
+            add[k] = v
+
         add["Blacklisted & Liquid Purchase (0%)"] = float(blacklisted_sum)
         add[f"Change Of Broker In - TICOB ({float(WEIGHTS.get('cob_in_pct', 50)):.0f}%)"] = float(cob_in_w)
 
@@ -1831,7 +1887,7 @@ def _recompute_breakdown_and_np(rec: dict) -> dict:
         sub[f"Change Of Broker Out - TOCOB ({float(WEIGHTS.get('cob_out_pct', 120)):.0f}%)"] = float(cob_out_w)
 
         # Compute totals. Blacklisted bucket is 0% weight → not added to NP.
-        total_add = float(purchase + switch_in_w + debt_bonus + cob_in_w)
+        total_add = float(purchase + switch_in_w + sum(extracted_bonuses.values()) + cob_in_w)
         total_sub = float(redemption + switch_out_w + cob_out_w)
         net_val = float(total_add - total_sub)
 
@@ -2018,7 +2074,125 @@ def _normalize_ls_record(rec: dict, start: datetime, end: datetime) -> dict:
         rec = _apply_ls_positive_streak_bonus(rec)
     # else: Streak bonus disabled via config (Legacy Parity)
 
+    # ----------------------------------------------------
+    # NEW: Continuous Quarterly / Annual Bonus Projection
+    # ----------------------------------------------------
+    try:
+        # Determine current employee Identity (ID or Name)
+        # _apply_ls_positive_streak_bonus already handles lookup, but let's be robust using ID if present
+        emp_search = {}
+        if rec.get("employee_id"):
+             emp_search["employee_id"] = rec["employee_id"]
+        elif rec.get("employee_name"):
+             emp_search["employee_name"] = rec["employee_name"]
+
+        # Determine Current Quarter & FY Bounds
+        rec_month_key = rec.get("month", _month_key(start or datetime.utcnow()))
+        # Parse month key 'YYYY-MM' to datetime
+        try:
+             y_str, m_str = rec_month_key.split("-")
+             rec_dt = datetime(int(y_str), int(m_str), 15) # mid-month
+        except:
+             rec_dt = datetime.utcnow()
+
+        fy_mode = str(RUNTIME_OPTIONS.get("fy_mode", FY_MODE)).upper()
+
+        # Quarter Bounds
+        qs, qe, q_label = _get_quarter_bounds(rec_dt, fy_mode)
+        q_month_keys = []
+        cur = qs
+        while cur <= qe:
+            q_month_keys.append(_month_key(cur))
+            # next month logic
+            if cur.month == 12: cur = datetime(cur.year + 1, 1, 1)
+            else: cur = datetime(cur.year, cur.month + 1, 1)
+
+        # FY Bounds
+        fys, fye, fy_label = _get_fy_bounds(rec_dt, fy_mode)
+        fy_month_keys = []
+        cur = fys
+        while cur <= fye:
+            fy_month_keys.append(_month_key(cur))
+            if cur.month == 12: cur = datetime(cur.year + 1, 1, 1)
+            else: cur = datetime(cur.year, cur.month + 1, 1)
+
+        # Helper to get current month stats from THIS record
+        try:
+             curr_np = float(rec["Breakdown"]["Totals"]["Net Purchase (Formula)"])
+        except:
+             curr_np = 0.0
+        curr_pos = 1 if curr_np > 0 else 0
+
+        # Calculate Quarterly
+        past_q_keys = [k for k in q_month_keys if k < rec_month_key]
+        q_agg = {"net_purchase": 0.0, "positive_months": 0}
+        if past_q_keys and emp_search:
+              q_filter = emp_search.copy()
+              q_filter["month"] = {"$in": past_q_keys}
+              if db_leaderboard is not None:
+                  q_agg = _fetch_period_sum(db_leaderboard["Leaderboard_Lumpsum"], q_filter)
+
+        total_q_np = q_agg["net_purchase"] + curr_np
+        total_q_pos = q_agg["positive_months"] + curr_pos
+
+        # Calc Bonus for Quarter
+        # Using QTR_BONUS_TEMPLATE: { "slabs": [{ "min_np": X, "bonus_rupees": Y }] }
+        # And config: "min_positive_months"
+        q_bonus_amt, _ = _select_np_slab_bonus(total_q_np, QTR_BONUS_TEMPLATE)
+        # Check eligibility (positive months)
+        q_min_pos = int((QTR_BONUS_TEMPLATE or {}).get("min_positive_months", 2))
+        q_qualified = (total_q_pos >= q_min_pos)
+
+        # Calculate Annual
+        past_fy_keys = [k for k in fy_month_keys if k < rec_month_key]
+        fy_agg = {"net_purchase": 0.0, "positive_months": 0}
+        if past_fy_keys and emp_search:
+              fy_filter = emp_search.copy()
+              fy_filter["month"] = {"$in": past_fy_keys}
+              if db_leaderboard is not None:
+                  fy_agg = _fetch_period_sum(db_leaderboard["Leaderboard_Lumpsum"], fy_filter)
+
+        total_fy_np = fy_agg["net_purchase"] + curr_np
+        total_fy_pos = fy_agg["positive_months"] + curr_pos
+
+        # Calc Bonus for Annual
+        a_bonus_amt, _ = _select_np_slab_bonus(total_fy_np, ANNUAL_BONUS_TEMPLATE)
+        a_min_pos = int((ANNUAL_BONUS_TEMPLATE or {}).get("min_positive_months", 6))
+        a_qualified = (total_fy_pos >= a_min_pos)
+
+        # Bonus Month Restriction: Only show detailed projected bounty in end-of-quarter months
+        is_bonus_month = (rec_dt.month == qe.month)
+        if not is_bonus_month:
+             rec["bonus_projected"] = None
+        else:
+            rec["bonus_projected"] = {
+                "quarterly": {
+                    "period": q_label,
+                    "net_purchase_qtd": round_sig(total_q_np, 2),
+                    "positive_months": total_q_pos,
+                    "projected_amount": q_bonus_amt if q_qualified else 0.0,
+                    "potential_amount": q_bonus_amt, # Show what they COULD get
+                    "is_qualified": bool(q_qualified),
+                    "min_positive_months_req": q_min_pos
+                },
+                "annual": {
+                    "period": fy_label,
+                    "net_purchase_ytd": round_sig(total_fy_np, 2),
+                    "positive_months": total_fy_pos,
+                    "projected_amount": a_bonus_amt if a_qualified else 0.0,
+                    "potential_amount": a_bonus_amt,
+                    "is_qualified": bool(a_qualified),
+                    "min_positive_months_req": a_min_pos
+                }
+            }
+
+    except Exception as e:
+        logging.warning(f"[_normalize_ls_record] Projected bonus calc failed: {e}")
+        rec["bonus_projected"] = None
+
+
     rec.setdefault("SchemaVersion", SCHEMA_VERSION)
+
 
     # Apply compaction + config stamps if enabled / available
     if RUNTIME_OPTIONS.get("audit_mode", "compact") == "compact":
@@ -2427,18 +2601,17 @@ def _skip_match(name: str) -> bool:
     for common variants (e.g., 'vilakshan p bhutani').
     """
     s = " ".join(str(name or "").lower().split())
-    if s in SKIP_RM_NAMES:
-        return True
-    tokens = set(s.split())
-    # token-based skip rules
-    token_rules = [
-        {"vilakshan", "bhutani"},
-        {"pramod", "bhutani"},
-        {"manisha", "tendulkar"},
-    ]
-    for rule in token_rules:
-        if rule.issubset(tokens):
-            return True
+    s = " ".join(str(name or "").lower().split())
+
+    # 1. Check dynamic set from config
+    # if s in SKIP_RM_ALIASES:
+    #     return True
+
+    # 2. Check legacy static set (if any remaining) or env
+    # if s in SKIP_RM_NAMES:
+    #     return True
+
+    # NOTE: We now score EVERYONE. Exclusion is handled only at the Leaderboard API level (via "Ignored RMs" config).
     return False
 
 
@@ -2462,8 +2635,8 @@ _AUM_CACHE: dict[str, float] = {}
 
 # Key Vault URL and Mongo secret names can be configured via env
 KEY_VAULT_URL = os.getenv("KEY_VAULT_URL", "https://milestonetsl1.vault.azure.net/")
-MONGODB_SECRET_NAME = os.getenv("MONGODB_SECRET_NAME", "MONGODB_CONNECTION_STRING")
-LEADERBOARD_DB_NAME = os.getenv("LEADERBOARD_DB_NAME", "PLI_Leaderboard")
+MONGODB_SECRET_NAME = os.getenv("MONGODB_SECRET_NAME", "MongoDb-Connection-String")
+LEADERBOARD_DB_NAME = os.getenv("LEADERBOARD_DB_NAME", os.getenv("PLI_DB_NAME", "PLI_Leaderboard"))
 
 
 def get_secret(name: str, default: str | None = None) -> str | None:
@@ -2477,7 +2650,7 @@ def get_secret(name: str, default: str | None = None) -> str | None:
         return os.environ[name]
 
     # Back-compat alias: if code asks for the KV key but env only provides legacy name(s)
-    if name == "MONGODB_CONNECTION_STRING":
+    if name == "MongoDb-Connection-String":
         legacy = os.getenv("MONGO_CONN") or os.getenv("MONGO_URI") or os.getenv("MONGODB_URI")
         if legacy:
             return legacy
@@ -2677,8 +2850,176 @@ if LOG_PROFILE in ("summary", "minimal", "quiet"):
 
 # Compact helper to log (possibly large) Mongo queries safely
 
+def _log_query(label: str, query: dict, level=logging.DEBUG):
+    """Safely log a MongoDB query, truncating large lists if needed."""
+    try:
+        q_str = str(query)
+        if len(q_str) > 500:
+            q_str = q_str[:500] + "... [truncated]"
+        logging.log(level, f"{label}: {q_str}")
+    except:
+        pass
 
-def _log_query(label: str, q: dict, level: int = logging.DEBUG, max_chars: int = 1200) -> None:
+# ----------------------------
+# Period / Bounds Helpers
+# ----------------------------
+def _get_quarter_bounds(dt_val: datetime, fy_mode: str) -> tuple[datetime, datetime, str]:
+    """
+    Return (start_date, end_date, label) for the quarter containing dt_val.
+    fy_mode: "FY_APR" (India) or "FY_JAN" (Calendar).
+    """
+    m = dt_val.month
+    y = dt_val.year
+
+    if fy_mode == "FY_APR":
+        # Q1: Apr-Jun, Q2: Jul-Sep, Q3: Oct-Dec, Q4: Jan-Mar
+        if 4 <= m <= 6:
+            q_start, q_end = datetime(y, 4, 1), datetime(y, 7, 1) - timedelta(days=1)
+            label = f"Q1 FY{y}-{str(y+1)[-2:]}"
+        elif 7 <= m <= 9:
+            q_start, q_end = datetime(y, 7, 1), datetime(y, 10, 1) - timedelta(days=1)
+            label = f"Q2 FY{y}-{str(y+1)[-2:]}"
+        elif 10 <= m <= 12:
+            q_start, q_end = datetime(y, 10, 1), datetime(y + 1, 1, 1) - timedelta(days=1)
+            label = f"Q3 FY{y}-{str(y+1)[-2:]}"
+        else:  # 1 <= m <= 3
+            q_start, q_end = datetime(y, 1, 1), datetime(y, 4, 1) - timedelta(days=1)
+            # Belongs to FY ending in current year
+            label = f"Q4 FY{y-1}-{str(y)[-2:]}"
+    else:
+        # Calendar Year
+        # Q1: Jan-Mar, Q2: Apr-Jun, Q3: Jul-Sep, Q4: Oct-Dec
+        if 1 <= m <= 3:
+            q_start, q_end = datetime(y, 1, 1), datetime(y, 4, 1) - timedelta(days=1)
+            label = f"Q1 {y}"
+        elif 4 <= m <= 6:
+            q_start, q_end = datetime(y, 4, 1), datetime(y, 7, 1) - timedelta(days=1)
+            label = f"Q2 {y}"
+        elif 7 <= m <= 9:
+            q_start, q_end = datetime(y, 7, 1), datetime(y, 10, 1) - timedelta(days=1)
+            label = f"Q3 {y}"
+        else:
+            q_start, q_end = datetime(y, 10, 1), datetime(y + 1, 1, 1) - timedelta(days=1)
+            label = f"Q4 {y}"
+
+    # Clamp end to end-of-day
+    q_end_clamped = datetime(q_end.year, q_end.month, q_end.day, 23, 59, 59)
+    return q_start, q_end_clamped, label
+
+
+def _get_fy_bounds(dt_val: datetime, fy_mode: str) -> tuple[datetime, datetime, str]:
+    """
+    Return (start_date, end_date, label) for the Fiscal Year containing dt_val.
+    """
+    m = dt_val.month
+    y = dt_val.year
+
+    if fy_mode == "FY_APR":
+        # FY starts in April. If Jan-Mar, we are in FY(y-1)-y
+        if m < 4:
+            start_y = y - 1
+        else:
+            start_y = y
+
+        fy_start = datetime(start_y, 4, 1)
+        fy_end = datetime(start_y + 1, 4, 1) - timedelta(days=1)
+        label = f"FY {start_y}-{str(start_y+1)[-2:]}"
+    else:
+        # Calendar Year
+        fy_start = datetime(y, 1, 1)
+        fy_end = datetime(y + 1, 1, 1) - timedelta(days=1)
+        label = f"CY {y}"
+
+    fy_end_clamped = datetime(fy_end.year, fy_end.month, fy_end.day, 23, 59, 59)
+    return fy_start, fy_end_clamped, label
+
+
+def _aggregate_period_metrics(
+    lb_db,
+    emp_key_normalized: str,
+    start_dt: datetime,
+    end_dt: datetime,
+    current_month_key: str
+) -> dict:
+    """
+    Aggregates metrics for an employee over a date range from Leaderboard_Lumpsum.
+    Includes the *current* window's values implicitly if they are already in DB,
+    but usually this is called *during* processing so current month might not be fully persisted/indexed yet
+    OR we rely on 'month' string based queries.
+
+    Safe approach: Query by 'month' string range.
+    """
+    # 1. Generate list of month keys in range
+    cur = start_dt
+    end_limit = end_dt
+
+    month_keys = []
+    while cur <= end_limit:
+        month_keys.append(_month_key(cur))
+        # Advance to next month
+        if cur.month == 12:
+            cur = datetime(cur.year + 1, 1, 1)
+        else:
+            cur = datetime(cur.year, cur.month + 1, 1)
+
+    # Filter out current month if needed, or include?
+    # Logic: The current record being processed has up-to-date NP in 'Breakdown'.
+    # We should fetch OTHER months from DB and add CURRENT from memory context?
+    # NO, simpler: The caller (normalize) has the full current 'rec'.
+    # We query DB for strictly *previous* months in the period, then add current 'rec' values.
+
+    past_keys = [k for k in month_keys if k < current_month_key]
+
+    agg = {
+        "net_purchase": 0.0,
+        "positive_months": 0
+    }
+
+    if not past_keys:
+        return agg
+
+    try:
+        col = lb_db["Leaderboard_Lumpsum"]
+        # Match by normalized name/alias handling is tricky.
+        # Ideally we match by employee_id if available, else name.
+        # But _normalize_ls_record should help us.
+        # Let's assume the caller passes a robust query filter or we standardise on ID/Name.
+
+        # We'll rely on the fact that 'rec' has the canonical identification logic.
+        # BUT fetching by ID is safest.
+        pass
+    except Exception as e:
+        logging.warning("Failed to aggregate period metrics: %s", e)
+
+    return agg
+
+# Re-implementing clearer aggregation helper that takes the collection and filter
+def _fetch_period_sum(lb_col, query_filter: dict) -> dict:
+    try:
+        pipeline = [
+            {"$match": query_filter},
+            {"$group": {
+                "_id": None,
+                "total_np": {"$sum": "$Breakdown.Totals.Net Purchase (Formula)"},
+                "pos_months": {
+                    "$sum": {
+                        "$cond": [{"$gt": ["$Breakdown.Totals.Net Purchase (Formula)", 0]}, 1, 0]
+                    }
+                }
+            }}
+        ]
+        res = list(lb_col.aggregate(pipeline))
+        if res:
+            return {
+                "net_purchase": res[0].get("total_np", 0.0),
+                "positive_months": res[0].get("pos_months", 0)
+            }
+    except Exception as e:
+        logging.warning(f"[_fetch_period_sum] Aggregation failed: {e}")
+
+    return {"net_purchase": 0.0, "positive_months": 0}
+
+
     try:
         s = json.dumps(q, default=str)
     except Exception:
@@ -2723,7 +3064,7 @@ def _instance_id() -> str:
 
 
 def _locks_collection(mongo_client: pymongo.MongoClient):
-    dbname = "PLI_Leaderboard"
+    dbname = LEADERBOARD_DB_NAME
     colname = os.getenv("PLI_LOCKS_COLL", "Job_Locks")
     col = mongo_client[dbname][colname]
     try:
@@ -2870,7 +3211,7 @@ def run_net_purchase(
     db_leaderboard = leaderboard_db
 
     # Initialize runtime config from Mongo and compute a config hash for audit
-    _init_runtime_config(leaderboard_db)
+
     cfg_snapshot = _effective_config_snapshot()
     _LAST_CFG_HASH = _hash_dict(cfg_snapshot)
 
@@ -2882,7 +3223,7 @@ def run_net_purchase(
         # If not passed, create one (e.g. CLI or Timer run without passing client)
         # Note: If running in Azure Function, we might want to reuse if possible.
         # But for CLI entry points, we create here.
-        uri = os.getenv("MONGODB_CONNECTION_STRING") or os.getenv("MONGO_URI")
+        uri = os.getenv("MongoDb-Connection-String") or os.getenv("MONGO_URI")
         client_to_use = pymongo.MongoClient(uri)
 
     db = client_to_use[core_db_name]
@@ -3623,7 +3964,7 @@ def _upsert_lumpsum_record(collection, record: dict) -> None:
     month_key = record.get("month")
 
     if emp_id_for_write:
-        if emp_name_for_write and is_active_for_write:
+        if emp_name_for_write:  # Check only name; active status handled by eligibility logic
             try:
                 collection.update_one(
                     {
@@ -3768,6 +4109,45 @@ def _run_lumpsum_for_window(
         df = pd.DataFrame(docs)
         if df.empty:
             return df
+
+        # --- Defensive Filter: Exclude SIP/Systematic leakage ---
+        # If upstream logic accidentally dumps SIP records (transactionType="SIP" etc.) into
+        # purchase_txn, we must not count them as Lumpsum.
+        try:
+            # Case-insensitive column search
+            cols_map = {c.lower(): c for c in df.columns}
+
+            # Columns to check for forbidden keywords
+            type_col = cols_map.get("transactiontype") or cols_map.get("transaction_type") or cols_map.get("type")
+            cat_col = cols_map.get("category") or cols_map.get("cat")
+            for_col = cols_map.get("transactionfor") or cols_map.get("transaction_for")
+
+            exclude_mask = pd.Series(False, index=df.index)
+
+            # Keywords that definitely indicate non-Lumpsum
+            # (We use a simple string contains check)
+            if type_col:
+                exclude_mask |= df[type_col].astype(str).str.contains(r"SIP|SWP|Systematic", case=False, na=False)
+
+            if cat_col:
+                exclude_mask |= df[cat_col].astype(str).str.contains(r"Systematic", case=False, na=False)
+
+            if for_col:
+                exclude_mask |= df[for_col].astype(str).str.contains(r"SIP|Systematic", case=False, na=False)
+
+            excluded_count = exclude_mask.sum()
+            if excluded_count > 0:
+                logging.warning(
+                    "[Window] %s: DEFENSIVE FILTER dropped %d rows detecting SIP/Systematic keywords. "
+                    "Check upstream ingestion!",
+                    label,
+                    excluded_count
+                )
+                df = df[~exclude_mask].copy()
+
+        except Exception as e:
+            logging.warning("[Window] %s: Filter SIP check failed (non-fatal): %s", label, e)
+
 
         # Special-case: for COB we prefer filtering by TRANSFER DATE using MM-YYYY pattern
         transfer_col = None
@@ -4287,8 +4667,31 @@ def _run_lumpsum_for_window(
     pur_bl_by_rm = _sum_by_rm(dfs_bl["purchase"])
     sin_bl_by_rm = _sum_by_rm(dfs_bl["switchin"])
     sout_bl_by_rm = _sum_by_rm(dfs_bl["switchout"])
-    # cob_in_by_rm = _sum_by_rm(df_cob_in)
     # cob_out_by_rm = _sum_by_rm(df_cob_out)
+
+    # --- Pre-compute Category-wise Purchases for Generic Bonuses ---
+    pur_by_rm_cat = {}
+    if df_pur is not None and not df_pur.empty:
+        # Group by RM and Category, sum Amount
+        try:
+            temp_df = df_pur.copy()
+            # Ensure CATEGORY col exists (it should from _infer)
+            c_col = None
+            for col in temp_df.columns:
+                if str(col).strip().upper() == "CATEGORY":
+                    c_col = col
+                    break
+
+            if c_col:
+                temp_df["CAT_NORM"] = temp_df[c_col].astype(str).str.strip().str.upper()
+                grp_cat = temp_df.groupby(["RM", "CAT_NORM"])["AMOUNT"].sum()
+                for (r, c), v in grp_cat.items():
+                    r_str = str(r)
+                    if r_str not in pur_by_rm_cat:
+                        pur_by_rm_cat[r_str] = {}
+                    pur_by_rm_cat[r_str][c] = float(v)
+        except Exception as e:
+            logging.warning("[Lumpsum] Failed to pre-agg category purchases: %s", e)
 
     # --- Pre-compute Debt Purchase for Bonus Logic ---
     # We need to know how much of 'df_pur' constitutes "Debt" to check ratio.
@@ -4330,10 +4733,8 @@ def _run_lumpsum_for_window(
         if normalized_target and normalized_target in all_rms:
             all_rms = {normalized_target}
         elif normalized_target:
-             # Target might be valid name but absent in data this month
-             # In simulation we might want to return 0s?
-             # For now, if not in all_rms, we process nothing.
-             all_rms = set()
+             # Force include target_rm even if no activity to ensure Projected Bounty (zero doc) is generated
+             all_rms = {normalized_target}
         else:
             # Invalid target name
             all_rms = set()
@@ -4369,8 +4770,19 @@ def _run_lumpsum_for_window(
         switch_in_bl = sin_bl_by_rm.get(rm_name, 0.0)
         switch_out_bl = sout_bl_by_rm.get(rm_name, 0.0)
 
+        # FIXED: Wire up Category Rules (Toggles)
+        # If 'zero_weight_purchase' is FALSE, we INCLUDE blacklisted purchases.
+        # Default is TRUE (exclude), so we only add if it's False.
+        cat_rules = CATEGORY_RULES or {}
+        if not cat_rules.get("zero_weight_purchase", True):
+             purchase += purchase_bl
+
+        if not cat_rules.get("zero_weight_switch_in", True):
+             switch_in += switch_in_bl
+
         # LEGACY PARITY FIX: Add blacklisted switch-out back to regular switch-out
         # Legacy doesn't separate blacklisted switch-out - it includes them in the total
+        # We keep this behavior unless explicitly toggled otherwise (not exposed in UI yet, but robust)
         switch_out += switch_out_bl
 
         # --- Build Breakdown (weighted components used for NetPurchase formula) ---
@@ -4400,11 +4812,54 @@ def _run_lumpsum_for_window(
                     bonus_pct = float(debt_cfg.get("bonus_pct", 20))
                     debt_bonus_val = debt_pur * (bonus_pct / 100.0)
 
+        # --- Generic Category Bonuses (Equity, Hybrid, etc.) ---
+        cat_bonuses = {}
+        for bonus_key in ["equity_bonus", "hybrid_bonus"]:
+            cfg = WEIGHTS.get(bonus_key, {})
+            if cfg.get("enable"):
+                # Determine target category keyword (e.g. 'EQUITY', 'HYBRID')
+                # If not explicit, derive from key (equity_bonus -> EQUITY)
+                target_cat = str(cfg.get("category_keyword") or bonus_key.split('_')[0]).upper()
+
+                # Sum purchases for this category
+                cat_pur = 0.0
+                rm_cats = pur_by_rm_cat.get(rm_name, {})
+                for cat_name, sum_val in rm_cats.items():
+                    # Simple substring match or exact match depending on strictness?
+                    # Let's use substring to match "EQUITY" in "EQUITY - LARGE CAP"
+                    if target_cat in cat_name:
+                        cat_pur += float(sum_val or 0.0)
+
+                # Check percentage gate (max_ratio_pct)
+                total_pur = float(purchase)
+                ratio_ok = True
+                gate_str = ""
+
+                if total_pur > 0:
+                    ratio = (cat_pur / total_pur) * 100.0
+                    # Use 'gate_pct' or check 'max_ratio_pct' for logic value
+                    gate_val = cfg.get("gate_pct") or cfg.get("max_ratio_pct")
+                    if gate_val is not None and str(gate_val).strip():
+                        gate_thresh = float(gate_val)
+                        if ratio < gate_thresh:
+                            ratio_ok = False
+                        else:
+                            gate_str = f" if >{gate_thresh:g}%"
+
+                if cat_pur > 0 and ratio_ok:
+                    bpct = float(cfg.get("bonus_pct", 0.0))
+                    if bpct != 0:
+                        val = cat_pur * (bpct / 100.0)
+                        sign_str = "+" if bpct > 0 else ""
+                        label = f"{target_cat.title()} Purchase Bonus ({sign_str}{bpct:g}%{gate_str})"
+                        cat_bonuses[label] = val
+
         additions = {
             "Total Purchase (100%)": float(purchase),
             # Labels include dynamic percentage if non-standard
             f"Switch In ({switch_in_w_pct:.0f}%)": float(switch_in * (switch_in_w_pct / 100.0)),
             f"Debt Purchase Bonus (+{debt_cfg.get('bonus_pct', 20)}% if <{debt_cfg.get('max_debt_ratio_pct', 75)}%)": float(debt_bonus_val),
+            **cat_bonuses,
             "Blacklisted & Liquid Purchase (0%)": float(purchase_bl),
             "Switch Out (Blacklisted) -> Purchase (100%)": 0.0,  # Disabled for Legacy parity
             f"Change Of Broker In - TICOB ({cob_in_w_pct:.0f}%)": float(cob_in_val * (cob_in_w_pct / 100.0)),
@@ -4524,16 +4979,41 @@ def _run_lumpsum_for_window(
                     if band1_cap_rupees > 0.0
                     else trail_component
                 )
-            elif -1.0 < g <= -0.5:
-                # Band 2: Moderate negative growth - same trail formula but 2500 cap
+            # Parse slabs to find Band 2 Cap (Replacement for 'band2_rupees' flat key)
+            # Band 2 definition: Growth is between -1.0% and -0.5%
+            # We look for a slab where max_growth_pct is approx -0.5
+            band2_cap_from_slabs = 0.0
+            slabs = ls_pen_cfg.get("slabs")
+            if isinstance(slabs, list):
+                for s in slabs:
+                    try:
+                        # Loose float matching for -0.5
+                        mx = float(s.get("max_growth_pct", 0.0))
+                        if abs(mx - (-0.5)) < 0.001:
+                             # Found Band 2 slab
+                             band2_cap_from_slabs = float(s.get("cap_rupees", 0.0))
+                             break
+                    except:
+                        pass
+
+            if -1.0 < g <= -0.5:
+                # Band 2: Moderate negative growth
+                # FIXED: Logic now checks Slabs first, then flat key 'band2_rupees', then default 2500
                 trail_component = 0.0
                 if band1_trail_pct > 0.0 and monthly_trail_used is not None:
                     try:
                         trail_component = float(monthly_trail_used) * (band1_trail_pct / 100.0)
                     except Exception:
                         trail_component = 0.0
-                # Use 2500 cap for Band 2 (not band2_rupees which is flat)
-                penalty_rupees_applied = min(2500.0, trail_component)
+
+                # Priority: Slab Cap > Flat Key > Legacy Hardcode
+                cap = 2500.0
+                if band2_cap_from_slabs > 0.0:
+                    cap = band2_cap_from_slabs
+                elif band2_rupees > 0.0:
+                    cap = band2_rupees
+
+                penalty_rupees_applied = min(cap, trail_component)
             elif -0.5 < g <= 0.0:
                 # Band 3: Slight negative growth - NO PENALTY (0 penalty points)
                 penalty_rupees_applied = 0.0
@@ -5149,8 +5629,8 @@ def _cli_manual_run() -> None:
             return
 
     try:
-        # Call the new run_net_purchase function
-        run_net_purchase(leaderboard_db=lb_db)
+        # Call the new run_net_purchase function with the reusable client
+        run_net_purchase(leaderboard_db=lb_db, mongo_client=client)
         logging.info("[Month Done] CLI run complete.")
     except Exception as e:
         logging.error("[CLI] Manual run failed: %s", e, exc_info=True)

@@ -10,8 +10,8 @@ from bson import json_util, ObjectId
 from datetime import datetime
 
 # --- Configuration ---
-MONGO_URI = os.getenv("MONGODB_CONNECTION_STRING")
-DB_NAME = "PLI_Leaderboard"
+MONGO_URI = os.getenv("MongoDb-Connection-String")
+DB_NAME = os.getenv("PLI_DB_NAME", "PLI_Leaderboard")
 
 # Collections
 COLL_USERS = "Zoho_Users"
@@ -61,6 +61,7 @@ DEFAULT_LUMPSUM_CONFIG = {
         "band2_rupees": 2500.0,
     },
     "qtr_bonus_template": {
+        "min_positive_months": 2,
         "slabs": [
             {"min_np": 0, "bonus_rupees": 0},
             {"min_np": 1000000, "bonus_rupees": 0},
@@ -69,6 +70,7 @@ DEFAULT_LUMPSUM_CONFIG = {
         ]
     },
     "annual_bonus_template": {
+        "min_positive_months": 6,
         "slabs": [
             {"min_np": 0, "bonus_rupees": 0},
             {"min_np": 3000000, "bonus_rupees": 0},
@@ -93,6 +95,7 @@ DEFAULT_LUMPSUM_CONFIG = {
         "zero_weight_switch_in": True,
         "exclude_from_debt_bonus": True,
     },
+    "ignored_rms": [],
 }
 
 SCORING_CONFIG_ID_SIP = "Leaderboard_SIP"
@@ -118,7 +121,6 @@ DEFAULT_SIP_CONFIG = {
     },
     "coefficients": {
         "sip_points_per_rupee": 0.03,
-        "lumpsum_points_per_rupee": 0.001,
     },
     "bonus_slabs": {
         "sip_to_aum": [
@@ -147,6 +149,7 @@ DEFAULT_SIP_CONFIG = {
             {"max_loss": 999999999.0, "rate_bps": 3.0},
         ],
     },
+    "ignored_rms": [],
     "options": {
         "net_mode": "sip_only",
         "include_swp": False,
@@ -197,7 +200,32 @@ DEFAULT_INSURANCE_CONFIG = {
             {"min_dtr": None, "max_dtr": -29, "points": -200},
         ],
         "upsell_divisor": 500,
-    }
+    },
+    "weights": {
+        "ulip_multiplier": 0.0,
+        "tenure": {
+            "fresh": {
+                "1": 1.0, "2": 1.20, "3": 1.60, "4": 1.75, "5": 2.00
+            },
+            "renewal_positive": {
+                "1": 1.0, "2": 1.1, "3": 1.25, "4": 1.35, "5": 1.5
+            },
+            "renewal_negative": {
+                "1": 1.0, "2": 0.9, "3": 0.75, "4": 0.65, "5": 0.5
+            }
+        },
+        "categories": {
+            "motor": 0.40, "fire": 0.40, "burglary": 0.40, "marine": 0.40, "misc": 0.40,
+            "gmc": 0.40, "gmc otc": 0.50, "gpa": 0.20, "term insurance": 1.00,
+            "health": 1.00, "life": 0.00, "ulip": 0.00
+        }
+    },
+    "options": {
+        "auto_correct_fresh": True,
+        "skip_empty_policy_numbers": True
+    },
+    # Company-specific overrides (Whitelist/Blacklist logic)
+    "company_rules": [],
 }
 
 DEFAULT_REFERRAL_CONFIG = {
@@ -303,6 +331,10 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             if method == 'post':
                 return reset_scoring_insurance(req)
 
+        elif route == 'scoring/insurance/reaggregate':
+            if method == 'post':
+                return reaggregate_insurance(req)
+
         elif route == 'scoring/insurance/audit':
             if method == 'get':
                 return get_scoring_audit(req, SCORING_CONFIG_ID_INSURANCE)
@@ -325,6 +357,14 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             if method == 'get':
                 return search_schemes(req)
 
+        elif route == 'categories/search':
+            if method == 'get':
+                return search_categories(req)
+
+        elif route == 'rms/search':
+            if method == 'get':
+                return search_rms(req)
+
     except Exception as e:
         logging.error(f"Error in Settings_API: {e}", exc_info=True)
         return func.HttpResponse(json.dumps({"error": str(e)}), status_code=500, mimetype="application/json")
@@ -342,53 +382,89 @@ def get_users(req):
     db = _get_db()
     query_str = req.params.get('q', '')
 
-    # 1. Fetch Users (Validation: Zoho_Users is the master list)
-    filter_q = {}
+    # 1. Pipeline Definition
+    pipeline = []
+
+    # Match Stage
     if query_str:
-        filter_q = {
-            "$or": [
-                {"email": {"$regex": query_str, "$options": "i"}},
-                {"Full_Name": {"$regex": query_str, "$options": "i"}},
-                {"Name": {"$regex": query_str, "$options": "i"}}
-            ]
+        pipeline.append({
+            "$match": {
+                "$or": [
+                    {"email": {"$regex": query_str, "$options": "i"}},
+                    {"Full_Name": {"$regex": query_str, "$options": "i"}},
+                    {"Name": {"$regex": query_str, "$options": "i"}},
+                    {"full_name": {"$regex": query_str, "$options": "i"}}
+                ]
+            }
+        })
+
+    # Limit Stage (100 max)
+    pipeline.append({"$limit": 100})
+
+    # Projection Stage (Optimize Payload)
+    pipeline.append({
+        "$project": {
+            "email": 1,
+            "id": 1, # Zoho ID
+            "full_name": 1,
+            "Full_Name": 1,
+            "Name": 1,
+            "name": 1
         }
+    })
 
-    # Limit to 50 for performance if no query, else 100
-    limit = 100 if query_str else 50
-    users_cursor = db[COLL_USERS].find(filter_q).limit(limit)
-    users = list(users_cursor)
+    # Lookup Stage (Join Permissions)
+    pipeline.append({
+        "$lookup": {
+            "from": COLL_PERMISSIONS,
+            "localField": "email",
+            "foreignField": "email",
+            "as": "perm_doc"
+        }
+    })
 
-    # 2. Fetch Permissions
-    # We fetch all permissions for simplicity as the admin list won't be huge,
-    # or we could fetch purely for the IDs we found.
-    user_ids = [str(u.get('_id')) for u in users]
-    # Also collect 'id' field if present (Zoho ID)
-    zoho_ids = [u.get('id') for u in users if u.get('id')]
+    # Unwind Stage (Preserve users without permissions)
+    pipeline.append({
+        "$unwind": {
+            "path": "$perm_doc",
+            "preserveNullAndEmptyArrays": True
+        }
+    })
 
-    # Find permissions where user_id matches _id OR zoho_id matches
-    # Best practice: link via Email as immutable identity? Or Zoho ID?
-    # Let's use Email as the primary link key since it's consistent across systems usually.
-    emails = [u.get('email') for u in users if u.get('email')]
+    # Execute Aggregation
+    users_agg = list(db[COLL_USERS].aggregate(pipeline))
 
-    perms = list(db[COLL_PERMISSIONS].find({"email": {"$in": emails}}))
-    perm_map = {p.get('email'): p for p in perms}
-
-    # 3. Merge
+    # 2. Result Formatting
     result = []
-    for u in users:
+    for u in users_agg:
         email = u.get('email')
-        p = perm_map.get(email, {})
+        perm_doc = u.get('perm_doc', {})
 
         # Normalize Name
-        name = u.get('Full_Name') or u.get('Name') or u.get('name') or "Unknown"
+        name = u.get('full_name') or u.get('Full_Name') or u.get('Name') or u.get('name') or "Unknown"
+
+        # Super Admin Override
+        is_super_admin = email in ['vilakshan@niveshonline.com']
+
+        roles = perm_doc.get('roles', [])
+        permissions = perm_doc.get('permissions', {})
+
+        if is_super_admin:
+            roles = list(set(roles + ['admin']))
+            permissions = {
+                'view_team': True,
+                'edit_rules': True,
+                'manage_settings': True
+            }
 
         result.append({
             "id": str(u.get('_id')),
             "zoho_id": u.get('id'),
             "email": email,
             "name": name,
-            "roles": p.get('roles', []),
-            "permissions": p.get('permissions', {}) # e.g. { 'view_team': True, 'edit_rules': False }
+            "roles": roles,
+            "permissions": permissions,
+            "is_super_admin": is_super_admin
         })
 
     return func.HttpResponse(json_util.dumps(result), mimetype="application/json")
@@ -661,9 +737,43 @@ def reaggregate_lumpsum(req):
         body = {}
 
     # Get month(s) to process
-    months = body.get("months") or ([body.get("month")] if body.get("month") else [])
+    months = body.get("months")
+    start_month = body.get("month")
 
-    if not months:
+    if months:
+        # Explicit list provided
+        pass
+    elif start_month:
+        # Single month provided -> Treat as "Since" (Start Month to Present)
+        try:
+            # Parse start month
+            y, m = map(int, start_month.split("-"))
+            start_dt = datetime(y, m, 1)
+
+            # Current month
+            now = datetime.utcnow()
+            end_dt = datetime(now.year, now.month, 1)
+
+            # Generate range
+            months = []
+            curr = start_dt
+            # Iterate until curr is > end_dt.
+            # Note: We want to include current month.
+            while curr <= end_dt:
+                months.append(curr.strftime("%Y-%m"))
+                # Next month
+                if curr.month == 12:
+                    curr = datetime(curr.year + 1, 1, 1)
+                else:
+                    curr = datetime(curr.year, curr.month + 1, 1)
+
+            logging.info(f"Re-aggregating range: {start_month} to {months[-1]} ({len(months)} months)")
+
+        except Exception as e:
+            logging.error(f"Error parseing month range: {e}")
+            months = [start_month] # Fallback
+
+    else:
         # Default to current month
         now = datetime.utcnow()
         months = [now.strftime("%Y-%m")]
@@ -676,11 +786,13 @@ def reaggregate_lumpsum(req):
 
             # Use inline Python to:
             # 1. Run Lumpsum_Scorer to update Leaderboard_Lumpsum
-            # 2. Run Leaderboard aggregator to update Public_Leaderboard (which UI reads)
+            # 2. Run SIP_Scorer to update MF_SIP_Leaderboard (which calculates points from lumpsum NP)
+            # 3. Run Leaderboard aggregator to update Public_Leaderboard (which UI reads)
             inline_script = f'''
 import sys
 import os
 import pymongo
+from datetime import datetime
 # Ensure root dir is in path to import siblings
 current_dir = os.getcwd()
 if current_dir not in sys.path:
@@ -688,36 +800,57 @@ if current_dir not in sys.path:
 
 try:
     from Lumpsum_Scorer import run_net_purchase
+    from SIP_Scorer import run_pipeline
 except ImportError:
     # Fallback if running from a subdir
     parent = os.path.dirname(current_dir)
     sys.path.append(parent)
     from Lumpsum_Scorer import run_net_purchase
+    from SIP_Scorer import run_pipeline
 
 import Leaderboard
 
-mongo_uri = os.environ.get("MONGODB_CONNECTION_STRING")
+mongo_uri = os.environ.get("MongoDb-Connection-String")
 client = pymongo.MongoClient(mongo_uri)
 # Explicitly use V2 DB
-db = client["PLI_Leaderboard_v2"]
+db_name = os.environ.get("PLI_DB_NAME", "PLI_Leaderboard_v2")
+db = client[db_name]
 
+
+# Month to process
+month = "{month}"
 overrides = {{
     "options": {{
         "range_mode": "since",
-        "since_month": "{month}"
+        "since_month": month
     }}
 }}
 
-print(f"Starting re-aggregation for {month} on V2 DB...")
+# Step 1: Lumpsum Scorer
+print(f"[1/3] Running Lumpsum Scorer for {{month}} on {{db_name}}...")
 run_net_purchase(db, override_config=overrides, mongo_client=client)
 
-print(f"Updating Public Leaderboard for {month}...")
-Leaderboard.run("{month}")
+# Step 2: SIP Scorer (reads from Leaderboard_Lumpsum, writes points to MF_SIP_Leaderboard)
+print(f"[2/3] Running SIP Scorer for {{month}}...")
+year, month_num = map(int, month.split("-"))
+start_date = datetime(year, month_num, 1)
+if month_num == 12:
+    end_date = datetime(year + 1, 1, 1)
+else:
+    end_date = datetime(year, month_num + 1, 1)
+
+run_pipeline(start_date=start_date, end_date=end_date, mongo_uri=mongo_uri)
+
+# Step 3: Public Leaderboard Aggregator
+print(f"[3/3] Updating Public Leaderboard for {{month}}...")
+Leaderboard.run(month)
+
+print(f"✅ Re-aggregation complete for {{month}}")
 '''
             env = os.environ.copy()
             env["SUPPRESS_ENV_WARNING"] = "1"
             # Pass MongoDB connection from Azure Functions environment to subprocess
-            mongo_key = "MONGODB_CONNECTION_STRING"
+            mongo_key = "MongoDb-Connection-String"
             if mongo_key not in env and MONGO_URI:
                 env[mongo_key] = MONGO_URI
             # Ensure scorer and Leaderboard aggregator use V2 database (not V1)
@@ -734,11 +867,24 @@ Leaderboard.run("{month}")
             )
 
             if result.returncode == 0:
-                results.append({"month": month, "status": "success", "message": "Re-aggregation completed"})
+                # Success - return stdout output
+                output_msg = result.stdout.strip() or "Re-aggregation completed"
+                results.append({
+                    "month": month,
+                    "status": "success",
+                    "message": output_msg,
+                    "details": result.stderr[:200] if result.stderr else ""  # Include logs for debugging
+                })
                 logging.info(f"Lumpsum re-aggregation for {month} completed successfully")
             else:
-                results.append({"month": month, "status": "error", "message": result.stderr[:500]})
-                logging.error(f"Lumpsum re-aggregation for {month} failed: {result.stderr[:500]}")
+                # Actual failure - show error from stderr
+                error_msg = result.stderr[:500] if result.stderr else result.stdout[:500]
+                results.append({
+                    "month": month,
+                    "status": "error",
+                    "message": f"Process failed (code {result.returncode}): {error_msg}"
+                })
+                logging.error(f"Lumpsum re-aggregation for {month} failed: {error_msg}")
 
         except subprocess.TimeoutExpired:
             results.append({"month": month, "status": "error", "message": "Re-aggregation timed out (>5 minutes)"})
@@ -797,31 +943,34 @@ def get_scoring_audit(req, config_id=None):
 import pymongo
 def search_schemes(req):
     """
-    Search schemes in Milestone.bseschemes collection.
-    Query param: q (string)
+    Search schemes.
+    Originally looked in Milestone.bseschemes.
+    Fallback: Look in PLI_Leaderboard_v2.purchase_txn for unique 'SCHEME NAME'.
     """
-    # User specified DB: Milestone, Collection: bseschemes
-    client = pymongo.MongoClient(MONGO_URI)
-    db = client["Milestone"]
     query = req.params.get('q', '').strip()
 
     if not query or len(query) < 2:
         return func.HttpResponse(json.dumps([]), mimetype="application/json")
 
     try:
-        # Search for Scheme Name (case-insensitive regex)
-        # Limit to 20 results for performance
-        filter_q = {
-            "$or": [
-                {"Scheme Name": {"$regex": query, "$options": "i"}},
-                {"Scheme Code": {"$regex": query, "$options": "i"}}
-            ]
-        }
+        db = _get_db_v2()
 
-        # Projection: Only return Scheme Name and Code
-        projection = {"Scheme Name": 1, "Scheme Code": 1, "_id": 0}
+        # Aggregation to find distinct matches in transaction history
+        pipeline = [
+            {"$match": {"SCHEME NAME": {"$regex": query, "$options": "i"}}},
+            {"$group": {
+                "_id": "$SCHEME NAME",
+                "code": {"$first": "$IWELL CODE"}
+            }},
+            {"$limit": 20},
+            {"$project": {
+                "Scheme Name": "$_id",
+                "Scheme Code": "$code",
+                "_id": 0
+            }}
+        ]
 
-        cursor = db["bseschemes"].find(filter_q, projection).limit(20)
+        cursor = db["purchase_txn"].aggregate(pipeline)
         results = list(cursor)
 
         return func.HttpResponse(
@@ -830,6 +979,50 @@ def search_schemes(req):
         )
     except Exception as e:
         logging.error(f"Error searching schemes: {e}")
+        return func.HttpResponse(json.dumps({"error": str(e)}), status_code=500, mimetype="application/json")
+
+
+def search_categories(req):
+    """
+    Search categories.
+    For module='mf' (default): searched SUB CATEGORY in purchase_txn.
+    For module='insurance': searches policy_type in Insurance_Policy_Scoring.
+    """
+    query = req.params.get('q', '').strip()
+    module = req.params.get('module', 'mf').lower()
+
+    try:
+        db = _get_db_v2()
+
+        if module == 'insurance':
+            coll_name = "Insurance_Policy_Scoring"
+            match_field = "policy_type"
+        else:
+            coll_name = "purchase_txn"
+            match_field = "SUB CATEGORY"
+
+        # Aggregation to find distinct matches
+        pipeline = [
+            {"$match": {match_field: {"$regex": query, "$options": "i"}}},
+            {"$group": {
+                "_id": f"${match_field}"
+            }},
+            {"$limit": 20},
+            {"$project": {
+                "category": "$_id",
+                "_id": 0
+            }}
+        ]
+
+        cursor = db[coll_name].aggregate(pipeline)
+        results = [r["category"] for r in cursor if r.get("category")]
+
+        return func.HttpResponse(
+            json.dumps(results),
+            mimetype="application/json"
+        )
+    except Exception as e:
+        logging.error(f"Error searching categories ({module}): {e}")
         return func.HttpResponse(json.dumps({"error": str(e)}), status_code=500, mimetype="application/json")
 
 
@@ -945,105 +1138,14 @@ def reset_scoring_sip(req):
 
 def reaggregate_sip(req):
     """
-    Trigger re-aggregation of SIP scores using SIP_Scorer module via subprocess.
-    Expects JSON body: { "month": "YYYY-MM" }
+    Trigger complete re-aggregation pipeline for specified month(s).
+    Runs: Lumpsum_Scorer → SIP_Scorer → Public_Leaderboard
+
+    This is identical to reaggregate_lumpsum to ensure consistency.
+    Body: { "month": "2025-12" } or { "months": ["2025-11", "2025-12"] }
     """
-    try:
-        req_body = req.get_json()
-        month = req_body.get('month')
-        if not month:
-             return func.HttpResponse(
-                json.dumps({"error": "Missing month parameter"}),
-                status_code=400,
-                mimetype="application/json"
-            )
-
-        logging.info(f"Triggering SIP re-aggregation for {month}")
-
-        # Determine paths
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        root_dir = os.path.dirname(current_dir)
-
-        # Calculate start/end dates for the month
-        # SIP Scorer takes --start YYYY-MM-DD --end YYYY-MM-DD
-        try:
-             y, m = map(int, month.split('-'))
-             start_date = datetime(y, m, 1)
-             if m == 12:
-                 end_date = datetime(y+1, 1, 1)
-             else:
-                 end_date = datetime(y, m+1, 1)
-
-             start_str = start_date.strftime("%Y-%m-%d")
-             end_str = end_date.strftime("%Y-%m-%d")
-        except Exception as e:
-             return func.HttpResponse(
-                json.dumps({"error": f"Invalid month format: {e}"}),
-                status_code=400,
-                mimetype="application/json"
-            )
-
-        # Prepare environment
-        env = os.environ.copy()
-        env["PYTHONPATH"] = root_dir
-        # Ensure we point to the correct DB
-        env["PLI_DB_NAME"] = DB_NAME_V2
-        env["DB_NAME"] = DB_NAME_V2 # For Leaderboard logic
-
-        # Command: python -m SIP_Scorer --start <start> --end <end>
-        cmd = [
-            sys.executable,
-            "-m", "SIP_Scorer",
-            "--start", start_str,
-            "--end", end_str
-        ]
-
-        result = subprocess.run(
-            cmd,
-            cwd=root_dir,
-            env=env,
-            capture_output=True,
-            text=True
-        )
-
-        if result.returncode != 0:
-            logging.error(f"SIP re-aggregation failed: {result.stderr}")
-            return func.HttpResponse(
-                json.dumps({
-                    "error": "Re-aggregation process failed",
-                    "details": result.stderr
-                }),
-                status_code=500,
-                mimetype="application/json"
-            )
-
-        logging.info(f"SIP re-aggregation success: {result.stdout}")
-
-        # Also run Leaderboard aggregation to reflect changes in Public Leaderboard
-        # Same as lumpsum logic
-        try:
-             # Inline import to avoid circular dependency or top-level issues
-             import Leaderboard
-             Leaderboard.run(month)
-        except Exception as e:
-             logging.warning(f"Leaderboard aggregation failed after SIP calc: {e}")
-             # We don't fail the request, just warn
-
-        return func.HttpResponse(
-            json.dumps({
-                "message": f"Successfully re-aggregated SIP scores for {month}",
-                "output": result.stdout
-            }),
-            mimetype="application/json"
-        )
-
-    except Exception as e:
-         logging.error(f"Error in reaggregate_sip: {e}", exc_info=True)
-         return func.HttpResponse(
-            json.dumps({"error": str(e)}),
-            status_code=500,
-            mimetype="application/json"
-        )
+    # Reuse the same logic as reaggregate_lumpsum
+    return reaggregate_lumpsum(req)
 
 # --- Insurance Scoring Handlers ---
 
@@ -1128,7 +1230,7 @@ def update_scoring_insurance(req: func.HttpRequest) -> func.HttpResponse:
         )
 
         return func.HttpResponse(
-            json.dumps({"message": "Configuration updated successfully"}),
+            json.dumps({"message": "Configuration updated successfully."}),
             status_code=200,
             mimetype="application/json"
         )
@@ -1176,6 +1278,212 @@ def reset_scoring_insurance(req: func.HttpRequest) -> func.HttpResponse:
             status_code=500,
             mimetype="application/json"
         )
+
+
+def _trigger_insurance_reaggregation_logic():
+    """
+    Helper to trigger the Insurance Scorer subprocess.
+    Returns (success: bool, output: str)
+    """
+    import subprocess
+    import sys
+
+    logging.info("Triggering Insurance scorer re-aggregation")
+    inline_script = '''
+import sys
+import os
+
+current_dir = os.getcwd()
+if current_dir not in sys.path:
+    sys.path.append(current_dir)
+
+try:
+    from Insurance_scorer import Run_insurance_Score
+except ImportError:
+    parent = os.path.dirname(current_dir)
+    sys.path.append(parent)
+    from Insurance_scorer import Run_insurance_Score
+
+print("[1/2] Running Insurance Scorer...")
+Run_insurance_Score()
+print("Insurance scoring complete")
+'''
+    env = os.environ.copy()
+    env["SUPPRESS_ENV_WARNING"] = "1"
+    # Ensure writes go to Public_Leaderboard
+    env["PLI_DISABLE_LEADERBOARD"] = "0"
+
+    mongo_key = "MongoDb-Connection-String"
+    if mongo_key not in env and MONGO_URI:
+        env[mongo_key] = MONGO_URI
+    target_db = env.get("PLI_DB_NAME") or DB_NAME_V2
+    env.setdefault("PLI_DB_NAME", target_db)
+    env.setdefault("MONGO_DB_NAME", target_db)
+    env.setdefault("LEADERBOARD_DB_NAME", target_db)
+    env.setdefault("DB_NAME", target_db)
+
+    extra_paths = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+    env["PATH"] = ":".join(p for p in ([env.get("PATH", "")] + extra_paths) if p)
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", inline_script],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            cwd="/Users/vilakshanbhutani/Desktop/Azure Function/PLI_Leaderboard",
+            env=env,
+        )
+        if result.returncode != 0:
+            logging.error(f"Insurance scorer failed: {result.stderr}")
+            return False, result.stderr
+        return True, result.stdout
+    except Exception as e:
+        logging.error(f"Failed to spawn insurance scorer: {e}")
+        return False, str(e)
+
+
+def reaggregate_insurance(req):
+    """
+    Trigger Insurance scorer + Public Leaderboard re-aggregation for specified month(s).
+    Body: { "month": "2025-12" } or { "months": ["2025-11", "2025-12"] }
+    """
+    try:
+        body = req.get_json()
+    except ValueError:
+        body = {}
+
+    # Get month(s) to process
+    months = body.get("months")
+    start_month = body.get("month")
+
+    if months:
+        # Explicit list provided
+        pass
+    elif start_month:
+        # Single month provided -> Treat as "Since" (Start Month to Present)
+        try:
+            y, m = map(int, start_month.split("-"))
+            start_dt = datetime(y, m, 1)
+
+            now = datetime.utcnow()
+            end_dt = datetime(now.year, now.month, 1)
+
+            months = []
+            curr = start_dt
+            while curr <= end_dt:
+                months.append(curr.strftime("%Y-%m"))
+                if curr.month == 12:
+                    curr = datetime(curr.year + 1, 1, 1)
+                else:
+                    curr = datetime(curr.year, curr.month + 1, 1)
+
+            logging.info(
+                "Insurance re-aggregation range: %s to %s (%s months)",
+                start_month,
+                months[-1],
+                len(months),
+            )
+        except Exception as e:
+            logging.error("Error parsing insurance month range: %s", e)
+            months = [start_month]  # Fallback
+    else:
+        now = datetime.utcnow()
+        months = [now.strftime("%Y-%m")]
+
+    results = []
+
+    # Step 1: run Insurance scorer (now using helper)
+    success, output = _trigger_insurance_reaggregation_logic()
+    if not success:
+         return func.HttpResponse(
+            json.dumps({"error": "Scorer failed", "details": output}),
+            status_code=500,
+            mimetype="application/json"
+        )
+
+    results.append("Insurance scorer executed successfully.")
+
+    # Step 2: run Public Leaderboard for each requested month
+    for month in months:
+        try:
+            logging.info("Triggering Public Leaderboard refresh for %s", month)
+            inline_script = f'''
+import sys
+import os
+
+current_dir = os.getcwd()
+if current_dir not in sys.path:
+    sys.path.append(current_dir)
+
+import Leaderboard
+
+mongo_uri = os.environ.get("MongoDb-Connection-String")
+db_name = os.environ.get("PLI_DB_NAME", "{DB_NAME_V2}")
+
+Leaderboard.run("{month}", mongo_uri=mongo_uri, db_name=db_name)
+print("Public Leaderboard updated for {month}")
+'''
+            env = os.environ.copy()
+            env["SUPPRESS_ENV_WARNING"] = "1"
+            mongo_key = "MongoDb-Connection-String"
+            if mongo_key not in env and MONGO_URI:
+                env[mongo_key] = MONGO_URI
+            target_db = env.get("PLI_DB_NAME") or DB_NAME_V2
+            env.setdefault("PLI_DB_NAME", target_db)
+            env.setdefault("MONGO_DB_NAME", target_db)
+            env.setdefault("LEADERBOARD_DB_NAME", target_db)
+            env.setdefault("DB_NAME", target_db)
+
+            result = subprocess.run(
+                [sys.executable, "-c", inline_script],
+                capture_output=True,
+                text=True,
+                timeout=180,
+                cwd="/Users/vilakshanbhutani/Desktop/Azure Function/PLI_Leaderboard",
+                env=env,
+            )
+
+            if result.returncode == 0:
+                output_msg = result.stdout.strip() or "Leaderboard updated"
+                results.append(
+                    {
+                        "month": month,
+                        "status": "success",
+                        "message": output_msg,
+                        "details": result.stderr[:200] if result.stderr else "",
+                    }
+                )
+                logging.info("Public Leaderboard refresh for %s completed", month)
+            else:
+                error_msg = result.stderr[:2000] if result.stderr else result.stdout[:2000]
+                results.append(
+                    {
+                        "month": month,
+                        "status": "error",
+                        "message": f"Leaderboard refresh failed (code {result.returncode}): {error_msg}",
+                    }
+                )
+                logging.error(
+                    "Public Leaderboard refresh for %s failed: %s", month, error_msg
+                )
+        except subprocess.TimeoutExpired:
+            results.append(
+                {
+                    "month": month,
+                    "status": "error",
+                    "message": "Leaderboard refresh timed out (>3 minutes)",
+                }
+            )
+            logging.error("Public Leaderboard refresh for %s timed out", month)
+        except Exception as e:
+            results.append({"month": month, "status": "error", "message": str(e)})
+            logging.error("Public Leaderboard refresh for %s error: %s", month, e)
+
+    return func.HttpResponse(
+        json.dumps({"results": results, "processed": len(results)}),
+        mimetype="application/json",
+    )
 
 
 # --- Referral Scoring Handlers ---
@@ -1283,3 +1591,51 @@ def reset_scoring_referral(req):
         status_code=200,
         mimetype="application/json"
     )
+
+def search_rms(req):
+    """
+    Searches for RMs in the Public_Leaderboard collection for unique names.
+    Query param: q (search string)
+    """
+    db = _get_db() # Uses V1 DB where Public_Leaderboard lives
+    query = req.params.get('q', '').strip()
+
+    if not query or len(query) < 2:
+        return func.HttpResponse(json.dumps([]), mimetype="application/json")
+
+    try:
+        # Use aggregation to find distinct RM names matching the query
+        pipeline = [
+            {
+                "$match": {
+                    "rm_name": {"$regex": query, "$options": "i"}
+                }
+            },
+            {
+                "$group": {
+                    "_id": {"$toLower": "$rm_name"},
+                    "original_name": {"$first": "$rm_name"}
+                }
+            },
+            {
+                "$limit": 20
+            },
+            {
+                "$project": {
+                    "_id": 0,
+                    "name": "$original_name"
+                }
+            }
+        ]
+
+        # Check Public_Leaderboard (aggregated data)
+        results = list(db["Public_Leaderboard"].aggregate(pipeline))
+
+        # Extract just the names
+        names = sorted([r["name"] for r in results])
+
+        return func.HttpResponse(json.dumps(names), mimetype="application/json")
+
+    except Exception as e:
+        logging.error(f"Error searching RMs: {e}")
+        return func.HttpResponse(json.dumps([]), mimetype="application/json")

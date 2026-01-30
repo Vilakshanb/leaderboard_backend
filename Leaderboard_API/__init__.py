@@ -5,15 +5,26 @@ import os
 import pymongo
 import pymongo
 from datetime import datetime, timezone
-
-from utils import auth_utils
-from utils.http import respond, options_response
 from ..utils import rbac
+import concurrent.futures
+import sys
+import os
+
+# Adjust path to import otel_setup from root/Shared
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    from otel_setup import setup_telemetry
+    tracer, meter = setup_telemetry("pli-leaderboard-api")
+except Exception as e:
+    logging.warning(f"Failed to initialize OpenTelemetry: {e}")
+else:
+    logging.info(f"OpenTelemetry Initialized. Tracer: {tracer}, Meter: {meter}")
+
+
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
-    if req.method == "OPTIONS":
-        return options_response()
     logging.info('Leaderboard_API processed a request.')
+
     # 1. Routing
     # Route format differs by host but we use route parameter support "leaderboard/{*route}"
     route_params = req.route_params
@@ -47,33 +58,23 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     elif subpath == "health":
         return func.HttpResponse(
             json.dumps({"status": "ok", "service": "leaderboard-api"}),
-            mimetype="application/json",
-            headers={
-              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-              "Access-Control-Allow-Credentials": "true",
-            }
+            mimetype="application/json"
         )
     elif subpath == "debug":
-        uri = os.getenv("MONGODB_CONNECTION_STRING")
-        db_name = os.getenv("PLI_DB_NAME", os.getenv("DB_NAME", "PLI_Leaderboard"))
+        uri = os.getenv("MongoDb-Connection-String")
+        db_name = os.getenv("PLI_DB_NAME", os.getenv("DB_NAME", "PLI_Leaderboard_v2"))
         # Mask URI
         masked_uri = uri.split("@")[1] if "@" in uri else "Hidden"
-        return func.HttpResponse(
-          json.dumps({
+        return func.HttpResponse(json.dumps({
             "db_name_in_use": db_name,
             "mongo_host_redacted": masked_uri,
             "collections_confirmed": ["Public_Leaderboard", "MF_SIP_Leaderboard", "Insurance_Policy_Scoring", "Config"]
-          }),
-          mimetype="application/json",
-          headers={
-            "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-            "Access-Control-Allow-Credentials": "true",
-          })
+        }), mimetype="application/json")
 
     return func.HttpResponse("Not Found", status_code=404)
 
 def get_db():
-    uri = os.getenv("MONGODB_CONNECTION_STRING")
+    uri = os.getenv("MongoDb-Connection-String")
     client = pymongo.MongoClient(uri)
     db_name = os.getenv("PLI_DB_NAME", os.getenv("DB_NAME", "PLI_Leaderboard_v2"))
     return client[db_name]
@@ -106,9 +107,6 @@ def json_serial(obj):
     return str(obj)
 
 def get_leaderboard(req):
-    if req.method == "OPTIONS":
-        return options_response()
-    # Query Params
     try:
         month = req.params.get("month")
         if not month:
@@ -118,167 +116,267 @@ def get_leaderboard(req):
         view_mode = req.params.get("view") # 'MTD' (default) or 'YTD'
         db = get_db()
 
-        leaderboard = []
-        adjustments = []
+        # 1. Fetch Ignored RMs (Pre-fetch for DB filtering)
+        # We can cache this or fetch once per request. Optimized to fetch only necessary fields.
+        ignored_set = set()
+        try:
+            configs = list(db.config.find(
+                {"_id": {"$in": ["Leaderboard_Lumpsum", "Leaderboard_SIP", "Leaderboard_Insurance"]}},
+                {"ignored_rms": 1}
+            ))
+            for cfg in configs:
+                for r in cfg.get("ignored_rms", []):
+                    ignored_set.add(str(r).strip().lower())
+        except Exception as e:
+            logging.warning(f"Failed to fetch ignored RMs: {e}")
 
+        # 2. Pipeline Construction
+        pipeline = []
+
+        # Timebox Logic
         if view_mode == "YTD":
-            # 1. Determine FY Start
             try:
                 sy, sm = map(int, month.split('-'))
-                # If Apr-Dec (4-12), start is Apr of same year.
-                # If Jan-Mar (1-3), start is Apr of prev year.
                 start_year = sy if sm >= 4 else sy - 1
                 start_month_str = f"{start_year}-04"
             except:
-                start_month_str = f"{datetime.now().year}-04" # Fallback
+                start_month_str = f"{datetime.now().year}-04"
 
-            logging.info(f"Fetching YTD Leaderboard: {start_month_str} to {month}")
+            logging.info(f"Fetching YTD Aggregation: {start_month_str} to {month}")
 
-            # 2. Aggregate Public Points
-            pipeline = [
-                {
-                    "$match": {
-                        "period_month": {"$gte": start_month_str, "$lte": month},
-                        "is_active": {"$ne": False}
-                    }
-                },
-                {
-                    "$group": {
-                        "_id": "$employee_id",
-                        "total_points_public": {"$sum": {"$toDouble": "$total_points_public"}},
-                        "ins_points": {"$sum": {"$toDouble": {"$ifNull": ["$ins_points", 0]}}},
-                        "mf_points": {"$sum": {"$toDouble": {"$ifNull": ["$mf_points", 0]}}},
-                        "ref_points": {"$sum": {"$toDouble": {"$ifNull": ["$ref_points", 0]}}},
-                        "sip_gross": {"$sum": {"$toDouble": {"$ifNull": ["$sip_gross", 0]}}},
-                        "sip_net": {"$sum": {"$toDouble": {"$ifNull": ["$sip_net", 0]}}},
-                        "sip_cancel": {"$sum": {"$toDouble": {"$ifNull": ["$sip_cancel", 0]}}},
-                        "sip_swp_reg": {"$sum": {"$toDouble": {"$ifNull": ["$sip_swp_reg", 0]}}},
-                        "sip_swp_canc": {"$sum": {"$toDouble": {"$ifNull": ["$sip_swp_canc", 0]}}},
-                        "ins_fresh_premium": {"$sum": {"$toDouble": {"$ifNull": ["$ins_fresh_premium", 0]}}},
-                        "ins_renewal_premium": {"$sum": {"$toDouble": {"$ifNull": ["$ins_renewal_premium", 0]}}},
-                        "avg_dtr": {"$avg": {"$toDouble": {"$ifNull": ["$avg_dtr", 0]}}},
-                        "ins_policy_count": {"$sum": {"$toDouble": {"$ifNull": ["$ins_policy_count", 0]}}},
-                        "lumpsum_gross_purchase": {"$sum": {"$toDouble": {"$ifNull": ["$lumpsum_gross_purchase", 0]}}},
-                        "lumpsum_redemption": {"$sum": {"$toDouble": {"$ifNull": ["$lumpsum_redemption", 0]}}},
-                        "lumpsum_switch_in": {"$sum": {"$toDouble": {"$ifNull": ["$lumpsum_switch_in", 0]}}},
-                        "lumpsum_switch_out": {"$sum": {"$toDouble": {"$ifNull": ["$lumpsum_switch_out", 0]}}},
-                        "lumpsum_cob_in": {"$sum": {"$toDouble": {"$ifNull": ["$lumpsum_cob_in", 0]}}},
-                        "lumpsum_cob_out": {"$sum": {"$toDouble": {"$ifNull": ["$lumpsum_cob_out", 0]}}},
-                        "rm_name": {"$first": "$rm_name"},
-                        "name": {"$first": "$name"},
-                        "employee_id": {"$first": "$employee_id"} # Ensure we keep it
-                    }
+            # Match Range
+            pipeline.append({
+                "$match": {
+                    "period_month": {"$gte": start_month_str, "$lte": month}
                 }
-            ]
-            leaderboard = list(db.Public_Leaderboard.aggregate(pipeline))
+            })
 
-            # 3. Fetch YTD Adjustments
-            adjustments = list(db.Leaderboard_Adjustments.find({
-                "month": {"$gte": start_month_str, "$lte": month},
-                "status": "APPROVED"
-            }))
+            # Filter Ignored RMs (Early Filter)
+            if ignored_set:
+                 pipeline.append({
+                    "$match": {
+                        "rm_name": {"$nin": list(ignored_set)}, # Case-sensitive exact match usually, lower logic in app?
+                        # Ideally we normalize checks. The DB usually has correct case.
+                        # If we need case-insensitive, we strictly need regex which is slow.
+                        # Assuming 'ignored_rms' matches DB 'rm_name' casing roughly or we accept minor mismatch.
+                        # For strictly Case-Insensitive filter in Aggregation without Regex:
+                        # We can use $toLower in $expr.
+                         "$expr": {
+                             "$not": {
+                                 "$in": [{"$toLower": "$rm_name"}, list(ignored_set)]
+                             }
+                        }
+                    }
+                })
+
+            # Group (YTD Sums)
+            pipeline.append({
+                "$group": {
+                    "_id": "$employee_id",
+                    "total_points_public": {"$sum": {"$toDouble": "$total_points_public"}},
+                    "ins_points": {"$sum": {"$toDouble": {"$ifNull": ["$ins_points", 0]}}},
+                    "mf_points": {"$sum": {"$toDouble": {"$ifNull": ["$mf_points", 0]}}},
+                    "ref_points": {"$sum": {"$toDouble": {"$ifNull": ["$ref_points", 0]}}},
+                    # Keep metadata from first doc
+                    "rm_name": {"$first": "$rm_name"},
+                    "name": {"$first": "$name"},
+                    "employee_id": {"$first": "$employee_id"}
+                }
+            })
+
+            # YTD Adjustments Lookup
+            pipeline.append({
+                "$lookup": {
+                    "from": "Leaderboard_Adjustments",
+                    "let": {"eid": "$employee_id"},
+                    "pipeline": [
+                        {
+                            "$match": {
+                                "$expr": {
+                                    "$and": [
+                                        {"$eq": ["$employee_id", "$$eid"]},
+                                        {"$eq": ["$status", "APPROVED"]},
+                                        {"$gte": ["$month", start_month_str]},
+                                        {"$lte": ["$month", month]}
+                                    ]
+                                }
+                            }
+                        }
+                    ],
+                    "as": "adjustments_data"
+                }
+            })
 
         else:
-            # MTD (Default)
-            base_cursor = db.Public_Leaderboard.find({"period_month": month, "is_active": {"$ne": False}})
-            leaderboard = list(base_cursor)
+            # MTD
+            pipeline.append({
+                "$match": {
+                    "period_month": month
+                }
+            })
 
-            # Fetch MTD Adjustments
-            adjustments = list(db.Leaderboard_Adjustments.find({
-                "month": month,
-                "status": "APPROVED"
-            }))
+            # Ignored RMs Filter
+            if ignored_set:
+                 pipeline.append({
+                    "$match": {
+                         "$expr": {
+                             "$not": {
+                                 "$in": [{"$toLower": "$rm_name"}, list(ignored_set)]
+                             }
+                        }
+                    }
+                })
 
-        # 3. Overlay (Common Logic)
-        # Index adjustments by employee_id
-        adj_map = {}
-        for a in adjustments:
-            eid = a.get("employee_id")
-            if eid not in adj_map: adj_map[eid] = []
-            adj_map[eid].append(a)
+            # MTD Adjustments Lookup
+            pipeline.append({
+                "$lookup": {
+                    "from": "Leaderboard_Adjustments",
+                    "let": {"eid": "$employee_id"},
+                    "pipeline": [
+                        {
+                            "$match": {
+                                "$expr": {
+                                    "$and": [
+                                        {"$eq": ["$employee_id", "$$eid"]},
+                                        {"$eq": ["$status", "APPROVED"]},
+                                        {"$eq": ["$month", month]}
+                                    ]
+                                }
+                            }
+                        }
+                    ],
+                    "as": "adjustments_data"
+                }
+            })
 
-        # 4. Fetch Rupee Incentives (if MTD view)
-        inc_map = {}
+            # MTD Incentives Lookup
+            pipeline.append({
+                 "$lookup": {
+                    "from": "Rupee_Incentives",
+                    "localField": "employee_id",
+                    "foreignField": "employee_id",
+                    "pipeline": [
+                        {"$match": {"period_month": month}}
+                    ],
+                    "as": "incentive_data"
+                }
+            })
+
+        # Calculate Final Points & Format Adjustments
+        # Strategy:
+        # 1. Unwind adjustments (keep array but sum value) not really, better map/reduce inside project?
+        # 2. Use $reduce to sum adjustment values.
+        pipeline.append({
+            "$addFields": {
+                "adj_total": {
+                    "$reduce": {
+                        "input": "$adjustments_data",
+                        "initialValue": 0,
+                        "in": {"$add": ["$$value", {"$toDouble": {"$ifNull": ["$$this.value", 0]}}]}
+                    }
+                },
+                "adjustments": {
+                    "$map": {
+                        "input": "$adjustments_data",
+                        "as": "adj",
+                        "in": {
+                            "id": {"$toString": "$$adj._id"},
+                            "reason": "$$adj.reason",
+                            "val": {"$toDouble": "$$adj.value"},
+                            "type": "$$adj.adjustment_type"
+                        }
+                    }
+                }
+            }
+        })
+
+        # Add Adjustments to Total
+        pipeline.append({
+            "$addFields": {
+                "total_points_final": {
+                    "$add": [
+                        {"$toDouble": "$total_points_public"},
+                        "$adj_total"
+                    ]
+                }
+            }
+        })
+
+        # Incentive formatting (MTD only)
         if view_mode != "YTD":
-            incentives = list(db.Rupee_Incentives.find({"period_month": month}))
-            for inc in incentives:
-                eid = inc.get("employee_id")
-                if eid:
-                    inc_map[eid] = inc
+            pipeline.append({
+                "$addFields": {
+                    "rupee_incentive": {
+                        "$ifNull": [{"$arrayElemAt": ["$incentive_data", 0]}, {"total_incentive": 0}]
+                    }
+                }
+            })
 
-        final_list = []
+            # Calculate Slab (in-app logic moved to post-processing for logic reuse or complex slab logic?)
+            # Or use $switch logic?
+            # For strict speed, fetching slab config + $switch in aggregation is superior but complex to maintain.
+            # Let's keep Slab Calculation in Python for flexibility, but it's O(N) fast loop.
+        else:
+            # YTD: No incentives shown typically, or sum? Requirement usually MTD.
+             pipeline.append({
+                "$addFields": {
+                    "rupee_incentive": {"total_incentive": 0}
+                }
+            })
+
+        # Sort
+        pipeline.append({"$sort": {"total_points_final": -1}})
+
+        # Execute
+        leaderboard = list(db.Public_Leaderboard.aggregate(pipeline))
+
+        # Post-Processing: Slab Calculation (Fast in-memory)
+        # Fetch config once
+        incentive_slabs = []
+        if view_mode != "YTD":
+             sip_config = db.config.find_one({"_id": "Leaderboard_SIP_Config"}) or {}
+             incentive_slabs = sip_config.get("incentive_slabs", [])
+             incentive_slabs.sort(key=lambda x: x.get("min", 0), reverse=True)
+
         for row in leaderboard:
-            eid = row.get("employee_id") or row.get("_id") # Handle aggregate output
+            # Fix IDs
+            if "_id" in row and not isinstance(row["_id"], str):
+                 row["_id"] = str(row["_id"])
 
-            # Ensure safe float conversion
-            try:
-                pts = float(row.get("total_points_public", 0))
-            except:
-                pts = 0.0
+            # Remove helper fields
+            row.pop("adjustments_data", None)
+            row.pop("incentive_data", None)
+            row.pop("adj_total", None)
 
-            # Apply overlays
-            applied_adj = []
-            if eid in adj_map:
-                for adj in adj_map[eid]:
-                    try:
-                        val = float(adj.get("value", 0))
-                    except:
-                        val = 0.0
-
-                    if adj.get("adjustment_type") == "Points":
-                        pts += val
-                    applied_adj.append({
-                        "id": str(adj.get("_id")),
-                        "reason": adj.get("reason"),
-                        "val": val,
-                        "type": adj.get("adjustment_type")
-                    })
-
-            # Enrich row (non-destructive to DB)
-            out = dict(row)
-            out["total_points_final"] = pts
-            out["adjustments"] = applied_adj
-            out["employee_id"] = eid
-
-            # Attach Incentive Data
-            if eid in inc_map:
-                out["rupee_incentive"] = inc_map[eid]
-            else:
-                out["rupee_incentive"] = {"total_incentive": 0}
-
-            out.pop("_id", None)
-            final_list.append(out)
-
-        # Sort by final points desc
-        final_list.sort(key=lambda x: x.get("total_points_final", 0), reverse=True)
+            # Slab Logic
+            if view_mode != "YTD":
+                current_total = float(row.get("rupee_incentive", {}).get("total_incentive", 0))
+                slab_label = "S1"; slab_name = "₹0 - ₹9,999"
+                if incentive_slabs:
+                    for s in incentive_slabs:
+                        if current_total >= s.get("min", 0):
+                            slab_label = s.get("label"); slab_name = s.get("name")
+                            break
+                if "rupee_incentive" not in row: row["rupee_incentive"] = {}
+                row["rupee_incentive"]["current_slab"] = {"label": slab_label, "name": slab_name}
 
         return func.HttpResponse(
-            json.dumps(final_list, default=json_serial),
-            mimetype="application/json",
-            headers={
-              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-              "Access-Control-Allow-Credentials": "true",
-            }
+            json.dumps(leaderboard, default=json_serial),
+            mimetype="application/json"
         )
 
     except Exception as e:
         logging.error(f"Error in get_leaderboard: {e}", exc_info=True)
         return func.HttpResponse("Internal Server Error", status_code=500)
 
+    except Exception as e:
+        logging.error(f"Error in get_leaderboard: {e}", exc_info=True)
+        return func.HttpResponse("Internal Server Error", status_code=500)
+
 def get_me(req):
-    if req.method == "OPTIONS":
-        return options_response()
-    
-    # email = rbac.get_user_email(req)
-    email = auth_utils.get_email_from_jwt_cookie(req)
+    email = rbac.get_user_email(req)
     if not email:
-        return func.HttpResponse(
-            "Unauthorized",
-            status_code=401, 
-            headers={
-              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-              "Access-Control-Allow-Credentials": "true",
-            })
+        return func.HttpResponse("Unauthorized", status_code=401)
 
     # Lookup Employee ID from Email via Zoho_Users
     db = get_db()
@@ -294,18 +392,12 @@ def get_me(req):
     return fetch_user_stats(req, eid)
 
 def get_user(req, employee_id):
-    if req.method == "OPTIONS":
-        return options_response()
-    
     # NOTE: Authorization Check should happen at Gateway Level via RBAC Service.
     # But as defense in depth, we could check headers here if forwarded.
     # For now, we trust the Gateway to only let Admins hit this.
     return fetch_user_stats(req, employee_id)
 
 def fetch_user_stats(req, eid):
-    if req.method == "OPTIONS":
-        return options_response()
-
     db = get_db()
     month = req.params.get("month", datetime.utcnow().strftime("%Y-%m"))
 
@@ -323,14 +415,7 @@ def fetch_user_stats(req, eid):
             row = db.Public_Leaderboard.find_one({"rm_name": eid, "period_month": month})
 
     if not row:
-        return func.HttpResponse(
-            json.dumps({}),
-            mimetype="application/json",
-            headers={
-              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-              "Access-Control-Allow-Credentials": "true",
-            }
-        )
+        return func.HttpResponse(json.dumps({}), mimetype="application/json")
 
     # Adjustments - try both employee_id and rm_name
     adjs = list(db.Leaderboard_Adjustments.find({"employee_id": eid, "month": month, "status": "APPROVED"}))
@@ -350,22 +435,11 @@ def fetch_user_stats(req, eid):
     out["adjustments"] = applied
     out.pop("_id", None)
 
-    return func.HttpResponse(
-        json.dumps(out, default=json_serial), 
-        mimetype="application/json",
-        headers={
-          "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-          "Access-Control-Allow-Credentials": "true",
-        }
-    )
+    return func.HttpResponse(json.dumps(out, default=json_serial), mimetype="application/json")
 
 def get_me_breakdown(req):
-    if req.method == "OPTIONS":
-        return options_response()
-
     # Authenticate
-    # email = rbac.get_user_email(req)
-    email = auth_utils.get_email_from_jwt_cookie(req)
+    email = rbac.get_user_email(req)
     if not email: return func.HttpResponse("Unauthorized", status_code=401)
 
     db = get_db()
@@ -376,16 +450,14 @@ def get_me_breakdown(req):
     return fetch_user_breakdown(req, eid)
 
 def get_user_breakdown(req, employee_id):
-    if req.method == "OPTIONS":
-        return options_response()
-
     # Trust Gateway AuthZ
-    return fetch_user_breakdown(req, employee_id)
+    res = fetch_user_breakdown(req, employee_id)
+    if res is None:
+        logging.error(f"[Breakdown] fetch_user_breakdown returned None for {employee_id}")
+        return func.HttpResponse(json.dumps({"error": "Internal Error: None Result"}), status_code=500, mimetype="application/json")
+    return res
 
 def fetch_user_breakdown(req, eid):
-    if req.method == "OPTIONS":
-        return options_response()
-    
     month = req.params.get("month", datetime.utcnow().strftime("%Y-%m"))
     db = get_db()
 
@@ -430,46 +502,44 @@ def fetch_user_breakdown(req, eid):
 
     logging.info(f"[Breakdown] Fetching for ID: {eid}, Fallback Name: {name_fallback}")
 
-    # 1. SIP
-    sip = db.MF_SIP_Leaderboard.find_one({
-        "$or": [{"period_month": month}, {"month": month}],
-        "employee_id": eid
-    })
-    if not sip and name_fallback:
-        sip = db.MF_SIP_Leaderboard.find_one({
+    logging.info(f"[Breakdown] Fetching for ID: {eid}, Fallback Name: {name_fallback}")
+
+    # parallel fetch
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+        f_sip = executor.submit(lambda: db.MF_SIP_Leaderboard.find_one({
             "$or": [{"period_month": month}, {"month": month}],
-            "rm_name": name_fallback
-        })
+            "employee_id": eid
+        }) or (db.MF_SIP_Leaderboard.find_one({
+             "$or": [{"period_month": month}, {"month": month}],
+             "rm_name": name_fallback
+        }) if name_fallback else None))
 
-    # 2. Lumpsum
-    lumpsum = db.Leaderboard_Lumpsum.find_one({"month": month, "employee_id": eid})
-    if not lumpsum and name_fallback:
-        lumpsum = db.Leaderboard_Lumpsum.find_one({"month": month, "employee_name": name_fallback})
+        f_lumpsum = executor.submit(lambda: db.Leaderboard_Lumpsum.find_one({"month": month, "employee_id": eid}) or (
+            db.Leaderboard_Lumpsum.find_one({"month": month, "employee_name": name_fallback}) if name_fallback else None
+        ))
 
-    # 3. Insurance (Assume ID is present as it's more strictly typed, but add fallback if needed)
-    ins_query = {"period_month": month, "employee_id": eid}
-    ins_cursor = db.Insurance_Policy_Scoring.find(ins_query)
-    insurance = list(ins_cursor)
-    if not insurance and name_fallback:
-        # Fallback for insurance if ID missing? Less likely but safe.
-        insurance = list(db.Insurance_Policy_Scoring.find({"period_month": month, "employee_name": name_fallback}))
+        f_ins = executor.submit(lambda: list(db.Insurance_Policy_Scoring.find({"period_month": month, "employee_id": eid})) or (
+             list(db.Insurance_Policy_Scoring.find({"period_month": month, "employee_name": name_fallback})) if name_fallback else []
+        ))
 
-    # 4. Referrals
-    ref_cursor = db.referralLeaderboard.find({"period_month": month, "employee_id": eid})
-    ref = list(ref_cursor)
-    if not ref and name_fallback:
-         ref_cursor = db.referralLeaderboard.find({"period_month": month, "referrer_name": name_fallback})
-         ref = list(ref_cursor)
+        f_ref = executor.submit(lambda: list(db.referralLeaderboard.find({"period_month": month, "employee_id": eid})) or (
+             list(db.referralLeaderboard.find({"period_month": month, "referrer_name": name_fallback})) if name_fallback else []
+        ))
 
-    # 5. Rupee Incentives
-    rupee_incentive = db.Rupee_Incentives.find_one({"period_month": month, "employee_id": eid})
-    if not rupee_incentive and name_fallback:
-        rupee_incentive = db.Rupee_Incentives.find_one({"period_month": month, "rm_name": name_fallback})
+        f_inc = executor.submit(lambda: db.Rupee_Incentives.find_one({"period_month": month, "employee_id": eid}) or (
+             db.Rupee_Incentives.find_one({"period_month": month, "rm_name": name_fallback}) if name_fallback else None
+        ))
 
-    # 6. Authoritative Summary (Public Leaderboard)
-    summary_row = db.Public_Leaderboard.find_one({"employee_id": eid, "period_month": month})
-    if not summary_row and name_fallback:
-        summary_row = db.Public_Leaderboard.find_one({"rm_name": name_fallback, "period_month": month})
+        f_sum = executor.submit(lambda: db.Public_Leaderboard.find_one({"employee_id": eid, "period_month": month}) or (
+            db.Public_Leaderboard.find_one({"rm_name": name_fallback, "period_month": month}) if name_fallback else None
+        ))
+
+        sip = f_sip.result()
+        lumpsum = f_lumpsum.result()
+        insurance = f_ins.result()
+        ref = f_ref.result()
+        rupee_incentive = f_inc.result()
+        summary_row = f_sum.result()
 
     res = {
         "employee_id": eid,
@@ -479,7 +549,7 @@ def fetch_user_breakdown(req, eid):
         "insurance_policies": insurance,
         "referral": ref,
         "rupee_incentive": rupee_incentive,
-        "summary": summary_row # Frontend can use this for consistent KPIs
+        "summary": summary_row
     }
 
     # [FIX] On-the-fly Rupee Incentive Calculation for Inactive/Missing RMs
@@ -515,7 +585,7 @@ def fetch_user_breakdown(req, eid):
                 # Connect to V2 DB for config
                 v2_db_name = os.getenv("PLI_DB_NAME", "PLI_Leaderboard_v2")
                 # Reuse UR from get_db() context or environment
-                mongo_uri = os.getenv("MONGODB_CONNECTION_STRING")
+                mongo_uri = os.getenv("MongoDb-Connection-String")
                 client_v2 = pymongo.MongoClient(mongo_uri)
                 db_v2 = client_v2[v2_db_name]
                 config_doc = db_v2.config.find_one({"_id": "Leaderboard_SIP"})
@@ -548,22 +618,173 @@ def fetch_user_breakdown(req, eid):
             # Non-critical, just continue without bounty data
             pass
 
+    # [FIX] On-the-fly Quarterly/Annual Bonus Projection (if missing)
+    # Check if this is a quarter-end month
+    try:
+        y_str, m_str = month.split("-")
+        req_dt = datetime(int(y_str), int(m_str), 15)
+        # Determine Quarter Ends (hardcoded checking standard quarters)
+        # Simplest: check if month is 3, 6, 9, 12.
+        # But depends on FY_MODE? Assuming FY_APR or CAL, QE months are same: Mar, Jun, Sep, Dec.
+        is_qe_month = int(m_str) in (3, 6, 9, 12)
+
+        # Condition: Is QE month AND (Lumpsum missing OR bonus_projected missing)
+        need_projection = is_qe_month and (
+            not res.get("lumpsum") or not res["lumpsum"].get("bonus_projected")
+        )
+
+        if need_projection:
+             if not res.get("lumpsum"):
+                 res["lumpsum"] = {} # Initialize if missing
+
+             # Fetch defaults from config
+             # We reuse the logic from rupee incentive block, fetch Config if not loaded
+             if "config_doc" not in locals() or not config_doc:
+                 try:
+                    client_v2 = pymongo.MongoClient(os.getenv("MongoDb-Connection-String"))
+                    db_v2 = client_v2[os.getenv("PLI_DB_NAME", "PLI_Leaderboard_v2")]
+                    config_doc = db_v2.config.find_one({"_id": "Leaderboard_Lumpsum"})
+                 except:
+                    config_doc = {}
+
+             # Load templates
+             q_tmpl = config_doc.get("qtr_bonus_template") or {
+                "slabs": [
+                    {"min_np": 0, "bonus_rupees": 0},
+                    {"min_np": 1000000, "bonus_rupees": 0},
+                    {"min_np": 2500000, "bonus_rupees": 0},
+                    {"min_np": 5000000, "bonus_rupees": 0}
+                ],
+                "min_positive_months": 2
+             }
+             a_tmpl = config_doc.get("annual_bonus_template") or {
+                "slabs": [
+                    {"min_np": 0, "bonus_rupees": 0},
+                    {"min_np": 3000000, "bonus_rupees": 0},
+                    {"min_np": 7500000, "bonus_rupees": 0},
+                    {"min_np": 12000000, "bonus_rupees": 0}
+                ],
+                 "min_positive_months": 6
+             }
+
+             # Calculate Quarter Bounds
+             qs, qe, q_label = _get_quarter_bounds_api(req_dt) # default FY_APR
+             # Calculate FY Bounds
+             fys, fye, fy_label = _get_fy_bounds_api(req_dt)
+
+             # Format for MongoDB query YYYY-MM
+             def format_month(dt): return dt.strftime("%Y-%m")
+
+             # Generate list of months in Quarter and FY up to current
+             q_months = []
+             curr = qs
+             while curr <= qe:
+                 q_months.append(format_month(curr))
+                 # next month
+                 if curr.month == 12: curr = datetime(curr.year + 1, 1, 1)
+                 else: curr = datetime(curr.year, curr.month + 1, 1)
+
+             fy_months = []
+             curr = fys
+             while curr <= fye:
+                 fy_months.append(format_month(curr))
+                 if curr.month == 12: curr = datetime(curr.year + 1, 1, 1)
+                 else: curr = datetime(curr.year, curr.month + 1, 1)
+
+             # Fetch Lumpsum records for this user for these periods
+             # Query: { month: { $in: fy_months }, employee_id: eid }
+             # Filter duplicates? No, Leaderboard_Lumpsum is one per user per month.
+             match_q = {"month": {"$in": q_months}}
+             match_a = {"month": {"$in": fy_months}}
+
+             if eid and str(eid).isdigit():
+                 match_q["employee_id"] = eid
+                 match_a["employee_id"] = eid
+             elif name_fallback:
+                 match_q["rm_name"] = name_fallback
+                 match_a["rm_name"] = name_fallback
+
+             # Aggregate Query
+             # Since q_months is subset of fy_months (usually), we can just fetch fy_months and filter in memory
+             recs = list(db.Leaderboard_Lumpsum.find(match_a))
+
+             # Compute Aggregates
+             q_np = 0.0
+             q_pos = 0
+             a_np = 0.0
+             a_pos = 0
+
+             for r in recs:
+                 m_key = r.get("month")
+                 # Net Purchase (Formula) is what Scorer uses?
+                 # Or use "Net Purchase"? "Net Purchase" in Breakdown Totals is final.
+                 # Let's check root "net_lumpsum"? No, Lumpsum doc has "NetPurchase" object usually or at root?
+                 # Inspecting schema: root has "net_purchase" (float)? No, usually structured.
+                 # Let's rely on Breakdown.Totals['Net Purchase (Formula)'] if present, else fallback
+                 np_val = 0.0
+                 try:
+                     np_val = float(r.get("Breakdown", {}).get("Totals", {}).get("Net Purchase (Formula)", 0))
+                 except:
+                     np_val = 0.0
+
+                 # Positive Month?
+                 is_pos = 1 if np_val > 0 else 0
+
+                 # Add to Annual
+                 a_np += np_val
+                 a_pos += is_pos
+
+                 # Add to Quarter if in q_months
+                 if m_key in q_months:
+                     q_np += np_val
+                     q_pos += is_pos
+
+             # Calculate Bonuses
+             q_bonus_val = _select_np_slab_bonus_api(q_np, q_tmpl)
+             a_bonus_val = _select_np_slab_bonus_api(a_np, a_tmpl)
+
+             q_min = int(q_tmpl.get("min_positive_months", 2))
+             a_min = int(a_tmpl.get("min_positive_months", 6))
+
+             q_qual = (q_pos >= q_min)
+             a_qual = (a_pos >= a_min)
+
+             # Populate Projection
+             res["lumpsum"]["bonus_projected"] = {
+                "quarterly": {
+                    "period": q_label,
+                    "net_purchase_qtd": q_np,
+                    "positive_months": q_pos,
+                    "projected_amount": q_bonus_val if q_qual else 0.0,
+                    "potential_amount": q_bonus_val,
+                    "is_qualified": q_qual,
+                    "min_positive_months_req": q_min
+                },
+                "annual": {
+                    "period": fy_label,
+                    "net_purchase_ytd": a_np,
+                    "positive_months": a_pos,
+                    "projected_amount": a_bonus_val if a_qual else 0.0,
+                    "potential_amount": a_bonus_val,
+                    "is_qualified": a_qual,
+                    "min_positive_months_req": a_min
+                }
+             }
+
+             # Mark as runtime calculated
+             res["lumpsum"]["bonus_projected_runtime"] = True
+
+    except Exception as ex:
+        logging.warning(f"Failed on-the-fly bonus projection: {ex}")
+        pass
+
     # Sanitize NaN/Infinity values before JSON serialization
     res = sanitize_for_json(res)
 
-    return func.HttpResponse(
-        json.dumps(res, default=json_serial), 
-        mimetype="application/json",
-        headers={
-          "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-          "Access-Control-Allow-Credentials": "true",
-        }
-    )
+    logging.info("[Breakdown] Returning HTTP Response")
+    return func.HttpResponse(json.dumps(res, default=json_serial), mimetype="application/json")
 
 def get_team_view(req):
-    if req.method == "OPTIONS":
-        return options_response()
-    
     """
     GET /api/leaderboard/team-view?month=YYYY-MM
     Returns aggregated team data for a given month.
@@ -571,8 +792,7 @@ def get_team_view(req):
     RBAC: Requires admin or superadmin role.
     """
     # RBAC Check
-    # user_email = rbac.get_user_email(req)
-    user_email = auth_utils.get_email_from_jwt_cookie(req)
+    user_email = rbac.get_user_email(req)
     if not rbac.is_admin(user_email):
         # Dev-only debug information
         is_dev = os.getenv("AZURE_FUNCTIONS_ENVIRONMENT") != "Production" or os.getenv("DEBUG_RBAC") == "1"
@@ -582,11 +802,7 @@ def get_team_view(req):
         return func.HttpResponse(
             json.dumps(error_response),
             status_code=403,
-            mimetype="application/json",
-            headers={
-              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-              "Access-Control-Allow-Credentials": "true",
-            }
+            mimetype="application/json"
         )
 
     try:
@@ -665,14 +881,7 @@ def get_team_view(req):
             })
 
         res = {"month": month, "teams": teams}
-        return func.HttpResponse(
-            json.dumps(res, default=json_serial), 
-            mimetype="application/json",
-            headers={
-              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-              "Access-Control-Allow-Credentials": "true",
-            }
-        )
+        return func.HttpResponse(json.dumps(res, default=json_serial), mimetype="application/json")
 
     except Exception as e:
         logging.exception(f"ERROR in get_team_view: {str(e)}")
@@ -688,15 +897,8 @@ def get_team_view(req):
             }
         else:
             error_response = {"error": "Internal Server Error"}
-            return func.HttpResponse(
-                json.dumps(error_response), 
-                status_code=500, 
-                mimetype="application/json",
-                headers={
-                "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-                "Access-Control-Allow-Credentials": "true",
-                }
-            )
+
+        return func.HttpResponse(json.dumps(error_response), status_code=500, mimetype="application/json")
 
     """
     GET /api/leaderboard/team-view?month=YYYY-MM
@@ -705,8 +907,7 @@ def get_team_view(req):
     RBAC: Requires admin or superadmin role.
     """
     # RBAC Check
-    # user_email = rbac.get_user_email(req)
-    user_email = auth_utils.get_email_from_jwt_cookie(req)
+    user_email = rbac.get_user_email(req)
     if not rbac.is_admin(user_email):
         # Dev-only debug information
         is_dev = os.getenv("AZURE_FUNCTIONS_ENVIRONMENT") != "Production" or os.getenv("DEBUG_RBAC") == "1"
@@ -716,11 +917,7 @@ def get_team_view(req):
         return func.HttpResponse(
             json.dumps(error_response),
             status_code=403,
-            mimetype="application/json",
-            headers={
-              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-              "Access-Control-Allow-Credentials": "true",
-            }
+            mimetype="application/json"
         )
 
     try:
@@ -784,11 +981,7 @@ def get_team_view(req):
 
         return func.HttpResponse(
             json.dumps(res, default=json_serial),
-            mimetype="application/json",
-            headers={
-              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-              "Access-Control-Allow-Credentials": "true",
-            }
+            mimetype="application/json"
         )
 
     except Exception as e:
@@ -814,20 +1007,13 @@ def get_team_view(req):
         return func.HttpResponse(
             json.dumps(error_response),
             status_code=500,
-            mimetype="application/json",
-            headers={
-              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-              "Access-Control-Allow-Credentials": "true",
-            }
+            mimetype="application/json"
         )
 
 
 
 
 def get_team_view_members(req):
-    if req.method == "OPTIONS":
-        return options_response()
-    
     """
     GET /api/leaderboard/team-view/members?month=YYYY-MM&group_type=team|manager|unassigned&group_key=XXX
     Returns members for a specific team/group for a given month.
@@ -835,8 +1021,7 @@ def get_team_view_members(req):
     RBAC: Requires admin or superadmin role.
     """
     # RBAC Check
-    # user_email = rbac.get_user_email(req)
-    user_email = auth_utils.get_email_from_jwt_cookie(req)
+    user_email = rbac.get_user_email(req)
     if not rbac.is_admin(user_email):
         # Dev-only debug information
         is_dev = os.getenv("AZURE_FUNCTIONS_ENVIRONMENT") != "Production" or os.getenv("DEBUG_RBAC") == "1"
@@ -846,11 +1031,7 @@ def get_team_view_members(req):
         return func.HttpResponse(
             json.dumps(error_response),
             status_code=403,
-            mimetype="application/json",
-            headers={
-              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-              "Access-Control-Allow-Credentials": "true",
-            }
+            mimetype="application/json"
         )
 
     try:
@@ -862,22 +1043,14 @@ def get_team_view_members(req):
             return func.HttpResponse(
                 json.dumps({"error": "month parameter required"}),
                 status_code=400,
-                mimetype="application/json",
-                headers={
-                    "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-                    "Access-Control-Allow-Credentials": "true",
-                }
+                mimetype="application/json"
             )
 
         if not group_type or not group_key:
             return func.HttpResponse(
                 json.dumps({"error": "group_type and group_key parameters required"}),
                 status_code=400,
-                mimetype="application/json",
-                headers={
-                    "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-                    "Access-Control-Allow-Credentials": "true",
-                }
+                mimetype="application/json"
             )
 
         db = get_db()
@@ -897,11 +1070,7 @@ def get_team_view_members(req):
             return func.HttpResponse(
                 json.dumps({"error": f"Invalid group_type: {group_type}. Must be team, manager, or unassigned"}),
                 status_code=400,
-                mimetype="application/json",
-                headers={
-                    "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-                    "Access-Control-Allow-Credentials": "true",
-                }
+                mimetype="application/json"
             )
 
         # Query members
@@ -966,11 +1135,7 @@ def get_team_view_members(req):
                 "manager_name": manager_name,
                 "members": members
             }, default=json_serial),
-            mimetype="application/json",
-            headers={
-              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-              "Access-Control-Allow-Credentials": "true",
-            }
+            mimetype="application/json"
         )
 
     except Exception as e:
@@ -978,26 +1143,18 @@ def get_team_view_members(req):
         return func.HttpResponse(
             json.dumps({"error": str(e)}),
             status_code=500,
-            mimetype="application/json",
-            headers={
-              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-              "Access-Control-Allow-Credentials": "true",
-            }
+            mimetype="application/json"
         )
 
 
 def get_all_breakdown(req):
-    if req.method == "OPTIONS":
-        return options_response()
-    
     """
     GET /api/leaderboard/breakdown?month=YYYY-MM&group_key=MASTER_TEAM
     Returns granular breakdown data for active and inactive RMs.
     Supports virtual grouping (MASTER_TEAM) to return all RMs.
     """
     # RBAC Check (Admin/Superadmin only)
-    # user_email = rbac.get_user_email(req)
-    user_email = auth_utils.get_email_from_jwt_cookie(req)
+    user_email = rbac.get_user_email(req)
     if not rbac.is_admin(user_email):
          # Dev check
          is_dev = os.getenv("AZURE_FUNCTIONS_ENVIRONMENT") != "Production" or os.getenv("DEBUG_RBAC") == "1"
@@ -1058,6 +1215,23 @@ def get_all_breakdown(req):
              ins_pts = 0
              ref_pts = 0
 
+        # Fetch Leaderboard_Lumpsum data for meeting multiplier info
+        ls_rec = db.Leaderboard_Lumpsum.find_one({"month": month, "employee_id": doc.get("employee_id")})
+        if not ls_rec and doc.get("rm_name"):
+            ls_rec = db.Leaderboard_Lumpsum.find_one({"month": month, "employee_name": doc.get("rm_name")})
+
+        # Extract meeting multiplier data
+        meetings_count = 0
+        meetings_multiplier = 1.0
+        base_incentive = 0.0
+        final_incentive = 0.0
+
+        if ls_rec:
+            meetings_count = ls_rec.get("meetings_count", 0) or 0
+            meetings_multiplier = ls_rec.get("meetings_multiplier", 1.0) or 1.0
+            base_incentive = ls_rec.get("base_incentive", 0.0) or 0.0
+            final_incentive = ls_rec.get("final_incentive", 0.0) or 0.0
+
         members.append({
             "employee_id": doc.get("employee_id"),
             "employee_name": doc.get("rm_name") or doc.get("RM_Name") or "Unknown",
@@ -1072,7 +1246,10 @@ def get_all_breakdown(req):
             "breakdown_details": {
                 "net_sip_contribution": net_sip,
                 "fresh_premium_collected": fresh_prem,
-                "meetings_attended": 0, # Placeholder
+                "meetings_attended": meetings_count,  # Now showing actual meeting count
+                "meetings_multiplier": meetings_multiplier,  # NEW: Meeting multiplier
+                "base_incentive": base_incentive,  # NEW: Base incentive (before multiplier)
+                "final_incentive": final_incentive,  # NEW: Final incentive (after multiplier)
                 "conversions": 0 # Placeholder
             }
         })
@@ -1083,11 +1260,83 @@ def get_all_breakdown(req):
         "members": members
     }
 
-    return func.HttpResponse(
-        json.dumps(res, default=json_serial), 
-        mimetype="application/json",
-        headers={
-            "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-            "Access-Control-Allow-Credentials": "true",
-        }
-    )
+# --- Helpers for On-the-Fly Bonus Projection ---
+def _get_quarter_bounds_api(dt_val: datetime, fy_mode: str = "FY_APR") -> tuple[datetime, datetime, str]:
+    """
+    Return (start_date, end_date, label) for the quarter containing dt_val.
+    fy_mode: "FY_APR" (India) or "FY_JAN" (Calendar).
+    """
+    m = dt_val.month
+    y = dt_val.year
+    from datetime import timedelta
+
+    if fy_mode == "FY_APR":
+        # Q1: Apr-Jun, Q2: Jul-Sep, Q3: Oct-Dec, Q4: Jan-Mar
+        if 4 <= m <= 6:
+            q_start, q_end = datetime(y, 4, 1), datetime(y, 7, 1) - timedelta(days=1)
+            label = f"Q1 FY{y}-{str(y+1)[-2:]}"
+        elif 7 <= m <= 9:
+            q_start, q_end = datetime(y, 7, 1), datetime(y, 10, 1) - timedelta(days=1)
+            label = f"Q2 FY{y}-{str(y+1)[-2:]}"
+        elif 10 <= m <= 12:
+            q_start, q_end = datetime(y, 10, 1), datetime(y + 1, 1, 1) - timedelta(days=1)
+            label = f"Q3 FY{y}-{str(y+1)[-2:]}"
+        else:  # 1 <= m <= 3
+            q_start, q_end = datetime(y, 1, 1), datetime(y, 4, 1) - timedelta(days=1)
+            label = f"Q4 FY{y-1}-{str(y)[-2:]}"
+    else:
+        # Calendar Year
+        if 1 <= m <= 3:
+            q_start, q_end = datetime(y, 1, 1), datetime(y, 4, 1) - timedelta(days=1)
+            label = f"Q1 {y}"
+        elif 4 <= m <= 6:
+            q_start, q_end = datetime(y, 4, 1), datetime(y, 7, 1) - timedelta(days=1)
+            label = f"Q2 {y}"
+        elif 7 <= m <= 9:
+            q_start, q_end = datetime(y, 7, 1), datetime(y, 10, 1) - timedelta(days=1)
+            label = f"Q3 {y}"
+        else:
+            q_start, q_end = datetime(y, 10, 1), datetime(y + 1, 1, 1) - timedelta(days=1)
+            label = f"Q4 {y}"
+
+    q_end_clamped = datetime(q_end.year, q_end.month, q_end.day, 23, 59, 59)
+    return q_start, q_end_clamped, label
+
+def _get_fy_bounds_api(dt_val: datetime, fy_mode: str = "FY_APR") -> tuple[datetime, datetime, str]:
+    m, y = dt_val.month, dt_val.year
+    from datetime import timedelta
+    if fy_mode == "FY_APR":
+        if m >= 4:
+            start = datetime(y, 4, 1)
+            end = datetime(y + 1, 4, 1) - timedelta(days=1)
+            label = f"FY {y}-{str(y+1)[-2:]}"
+        else:
+            start = datetime(y - 1, 4, 1)
+            end = datetime(y, 4, 1) - timedelta(days=1)
+            label = f"FY {y-1}-{str(y)[-2:]}"
+    else:
+        start = datetime(y, 1, 1)
+        end = datetime(y + 1, 1, 1) - timedelta(days=1)
+        label = f"CY {y}"
+
+    end_clamped = datetime(end.year, end.month, end.day, 23, 59, 59)
+    return start, end_clamped, label
+
+def _select_np_slab_bonus_api(np_value: float, template: dict) -> float:
+    try:
+        v = float(np_value or 0.0)
+    except:
+        v = 0.0
+    slabs = sorted(template.get("slabs", []), key=lambda x: float(x.get("min_np", 0.0)))
+    bonus = 0.0
+    for slab in slabs:
+        try:
+            threshold = float(slab.get("min_np", 0.0) or 0.0)
+            b = float(slab.get("bonus_rupees", 0) or 0)
+        except:
+            continue
+        if v >= threshold:
+            bonus = b
+    return float(bonus)
+
+    return func.HttpResponse(json.dumps(res, default=json_serial), mimetype="application/json")
