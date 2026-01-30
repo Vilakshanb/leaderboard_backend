@@ -1,11 +1,11 @@
 
-# import os
+import os
 import pymongo
 
 def check_may_data():
     try:
         # client = pymongo.MongoClient(os.getenv("MONGODB_CONNECTION_STRING"))
-        client = pymongo.MongoClient("mongodb+srv://Vilakshanb:TIW0YwgQNaI8iMSc@milestone.wftaulr.mongodb.net/?retryWrites=true&w=majority")
+        client = pymongo.MongoClient(os.getenv("MONGODB_CONNECTION_STRING"))
         db = client["PLI_Leaderboard_v2"]
 
         print(f"Connected to {db.name}")

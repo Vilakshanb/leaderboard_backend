@@ -5,6 +5,8 @@ import os
 import pymongo
 from bson import ObjectId
 from datetime import datetime
+
+from utils import auth_utils
 from ..utils import rbac
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
@@ -29,7 +31,8 @@ def get_db():
 
 def create_adjustment(req):
     # Auth: Manager only
-    email = rbac.get_user_email(req)
+    # email = rbac.get_user_email(req)
+    email = auth_utils.get_email_from_jwt_cookie(req)
     if not rbac.is_manager(email):
         return func.HttpResponse("Forbidden: Managers only", status_code=403)
 
@@ -77,7 +80,8 @@ def create_adjustment(req):
 def transition_adjustment(req, target_status):
     # Auth: Admin only for approval/revoke? Or Manager?
     # Spec says: Approve/Reject/Revoke -> ADMIN
-    email = rbac.get_user_email(req)
+    # email = rbac.get_user_email(req)
+    email = auth_utils.get_email_from_jwt_cookie(req)
     if not rbac.is_admin(email):
         return func.HttpResponse("Forbidden: Admins only", status_code=403)
 

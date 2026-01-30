@@ -4,7 +4,7 @@ import os
 import pprint
 
 def debug_kawal():
-    client = pymongo.MongoClient("mongodb+srv://Vilakshanb:TIW0YwgQNaI8iMSc@milestone.wftaulr.mongodb.net/?retryWrites=true&w=majority")
+    client = pymongo.MongoClient(os.getenv("MONGODB_CONNECTION_STRING"))
     db = client["PLI_Leaderboard_v2"]
 
     print("--- Public_Leaderboard (May 2025) ---")

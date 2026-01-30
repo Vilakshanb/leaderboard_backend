@@ -10,6 +10,8 @@ import logging
 
 from dotenv import load_dotenv, find_dotenv
 
+from utils.http import options_response
+
 # --- Azure Key Vault (guarded import) ---
 try:
     from azure.identity import DefaultAzureCredential  # type: ignore
@@ -244,14 +246,7 @@ def _validate(doc: Optional[Mapping[str, Any]]) -> Tuple[bool, Optional[str]]:
 def main(req: func.HttpRequest) -> func.HttpResponse:
     # CORS/preflight (harmless for server→server)
     if req.method == "OPTIONS":
-        return func.HttpResponse(
-            status_code=204,
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type",
-            },
-        )
+        return options_response()
 
     if req.method not in ("GET", "POST"):
         return func.HttpResponse("Only GET/POST supported.", status_code=405)
@@ -281,14 +276,20 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 json.dumps({"ok": True, "mongo_ping": pong}),
                 mimetype="application/json",
                 status_code=200,
-                headers={"Access-Control-Allow-Origin": "*"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:5173",
+                    "Access-Control-Allow-Credentials": "true"
+                },
             )
         except Exception as e:
             return func.HttpResponse(
                 json.dumps({"ok": False, "error": f"mongo ping failed: {e}"}),
                 mimetype="application/json",
                 status_code=500,
-                headers={"Access-Control-Allow-Origin": "*"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:5173",
+                    "Access-Control-Allow-Credentials": "true"
+                },
             )
     if mode == "get":
         mid = req.params.get("ID") if req.params else None
@@ -297,7 +298,10 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 json.dumps({"ok": False, "error": "ID is required for mode=get"}),
                 mimetype="application/json",
                 status_code=400,
-                headers={"Access-Control-Allow-Origin": "*"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:5173",
+                    "Access-Control-Allow-Credentials": "true"
+                },
             )
         try:
             doc_found = coll.find_one({"ID": mid}, {"_id": 0})
@@ -305,14 +309,20 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 json.dumps({"ok": True, "doc": doc_found}),
                 mimetype="application/json",
                 status_code=200,
-                headers={"Access-Control-Allow-Origin": "*"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:5173",
+                    "Access-Control-Allow-Credentials": "true"
+                },
             )
         except Exception as e:
             return func.HttpResponse(
                 json.dumps({"ok": False, "error": f"mongo find failed: {e}"}),
                 mimetype="application/json",
                 status_code=500,
-                headers={"Access-Control-Allow-Origin": "*"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:5173",
+                    "Access-Control-Allow-Credentials": "true"
+                },
             )
 
     data = _payload_from_request(req)
@@ -336,7 +346,10 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             json.dumps(debug_payload),
             status_code=400,
             mimetype="application/json",
-            headers={"Access-Control-Allow-Origin": "*"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:5173",
+                "Access-Control-Allow-Credentials": "true"
+            },
         )
 
     assert data is not None  # for type checkers; guarded by validation above
@@ -371,5 +384,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         json.dumps({"ok": True, "inserted_id": str(result.inserted_id)}),
         status_code=201,
         mimetype="application/json",
-        headers={"Access-Control-Allow-Origin": "*"},
+        headers={
+            "Access-Control-Allow-Origin": "http://localhost:5173",
+            "Access-Control-Allow-Credentials": "true"
+        },
     )

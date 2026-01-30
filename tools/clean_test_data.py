@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path="backend/local.settings.json")
 
 # Explicit connection string as fallback/primary to ensure we hit the same DB
-conn_str = "mongodb+srv://Vilakshanb:TIW0YwgQNaI8iMSc@milestone.wftaulr.mongodb.net/?retryWrites=true&w=majority"
+conn_str = os.getenv("MONGODB_CONNECTION_STRING")
 client = pymongo.MongoClient(conn_str)
 db = client["PLI_Leaderboard_v2"]
 

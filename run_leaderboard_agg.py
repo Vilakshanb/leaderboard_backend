@@ -2,9 +2,9 @@ import os
 import logging
 
 # Force connection string and DB Name (MUST BE BEFORE IMPORTS)
-os.environ["MONGODB_CONNECTION_STRING"] = "mongodb+srv://Vilakshanb:TIW0YwgQNaI8iMSc@milestone.wftaulr.mongodb.net/PLI_Leaderboard?retryWrites=true&w=majority"
-os.environ["PLI_DB_NAME"] = "PLI_Leaderboard_v2"
-os.environ["KEY_VAULT_URL"] = ""
+# os.environ["MONGODB_CONNECTION_STRING"] = "mongodb+srv://Vilakshanb:TIW0YwgQNaI8iMSc@milestone.wftaulr.mongodb.net/PLI_Leaderboard?retryWrites=true&w=majority"
+# os.environ["PLI_DB_NAME"] = "PLI_Leaderboard_v2"
+# os.environ["KEY_VAULT_URL"] = ""
 
 from Leaderboard import run
 
@@ -27,9 +27,9 @@ try:
     # 2. Verify Findings
     from pymongo import MongoClient
 
-    uri = os.environ["MONGODB_CONNECTION_STRING"]
+    uri = os.getenv("MONGODB_CONNECTION_STRING")
     client = MongoClient(uri)
-    db_name = os.environ["PLI_DB_NAME"]
+    db_name = os.getenv("PLI_DB_NAME")
     db = client[db_name]
 
     print("\n--- FINAL VERIFICATION ---")

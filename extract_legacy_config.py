@@ -7,6 +7,7 @@ import json
 
 MONGO_URI = (
     os.getenv('MongoDb-Connection-String')
+    or os.getenv('MONGODB_CONNECTION_STRING')
     or os.getenv('MONGO_CONN')
     or os.getenv('MONGO_URI')
     or os.getenv('MONGODB_URI')

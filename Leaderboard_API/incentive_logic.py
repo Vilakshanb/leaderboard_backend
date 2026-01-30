@@ -14,6 +14,28 @@ MF_LEADER_EMP_REGEX = os.getenv("PLI_MF_LEADER_EMP_REGEX", r"(?i)^sagar\s+maini"
 INS_LEADER_EMP_ID = os.getenv("PLI_INS_LEADER_EMP_ID")  # e.g., "2969103000154276001" (Sumit C)
 MF_LEADER_EMP_ID = os.getenv("PLI_MF_LEADER_EMP_ID")  # e.g., "2969103000000183019" (Sagar M)
 
+# Default MF tier thresholds and factors (fallback when config missing)
+default_thresholds = [
+  { "tier": "T6", "min_val": 60000, "label": "≥60k" },
+  { "tier": "T5", "min_val": 40000, "label": "40k–60k" },
+  { "tier": "T4", "min_val": 25000, "label": "25k–40k" },
+  { "tier": "T3", "min_val": 15000, "label": "15k–25k" },
+  { "tier": "T2", "min_val": 8000, "label": "8k–15k" },
+  { "tier": "T1", "min_val": 2000, "label": "2k–8k" },
+  { "tier": "T0", "min_val": { "$numberDouble": "-Infinity" }, "label": "<2k" }
+]
+
+default_factors = {
+    "T0": 0,
+    "T1": 0.000016667,
+    "T2": 0.000020833,
+    "T3": 0.000025,
+    "T4": 0.000029167,
+    "T5": 0.000033333,
+    "T6": 0.00375,
+}
+
+
 def build_rupee_incentives_pipeline(month: str, start: datetime, end: datetime, sip_config: dict = None, ins_config: dict = None):
     """
     Build Rupee_Incentives from the already-written Public_Leaderboard.
@@ -23,11 +45,37 @@ def build_rupee_incentives_pipeline(month: str, start: datetime, end: datetime, 
     # Defaults (Fallback if config missing)
     # Helpers to generate JS
     def make_js(thry_list, fact_dict):
+        def _coerce_min_val(v):
+            """
+            Convert configured min_val into a sortable numeric.
+            Handles legacy {"$numberDouble": "-Infinity"} objects and strings.
+            """
+            if isinstance(v, (int, float)):
+                return v
+            if isinstance(v, dict):
+                # Mongo export style numbers e.g. {"$numberDouble": "-Infinity"}
+                if "$numberDouble" in v:
+                    raw = v.get("$numberDouble")
+                    if isinstance(raw, str) and raw.lower() == "-infinity":
+                        return -float("inf")
+                    try:
+                        return float(raw)
+                    except (TypeError, ValueError):
+                        return 0
+            if isinstance(v, str):
+                if v.lower() == "-infinity":
+                    return -float("inf")
+                try:
+                    return float(v)
+                except ValueError:
+                    return 0
+            return 0
+
         # Sort desc by min_val
         safe_thr = []
         if isinstance(thry_list, list):
             safe_thr = sorted(
-                [dict(t, min_val=t.get("min_val", 0)) for t in thry_list],
+                [dict(t, min_val=_coerce_min_val(t.get("min_val", 0))) for t in thry_list],
                 key=lambda x: x["min_val"],
                 reverse=True
             )
@@ -97,7 +145,7 @@ def build_rupee_incentives_pipeline(month: str, start: datetime, end: datetime, 
             "$add": ["$mf_sip_rupees", "$mf_lump_rupees"]
         }
 
-        }
+        
 
     # ---- Insurance Logic Generation ----
     # Default Slabs (Fallback) matching hardcoded logic

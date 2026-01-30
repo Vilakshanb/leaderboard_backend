@@ -5,11 +5,15 @@ import os
 import pymongo
 import pymongo
 from datetime import datetime, timezone
+
+from utils import auth_utils
+from utils.http import respond, options_response
 from ..utils import rbac
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        return options_response()
     logging.info('Leaderboard_API processed a request.')
-
     # 1. Routing
     # Route format differs by host but we use route parameter support "leaderboard/{*route}"
     route_params = req.route_params
@@ -43,18 +47,28 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     elif subpath == "health":
         return func.HttpResponse(
             json.dumps({"status": "ok", "service": "leaderboard-api"}),
-            mimetype="application/json"
+            mimetype="application/json",
+            headers={
+              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Credentials": "true",
+            }
         )
     elif subpath == "debug":
         uri = os.getenv("MONGODB_CONNECTION_STRING")
         db_name = os.getenv("PLI_DB_NAME", os.getenv("DB_NAME", "PLI_Leaderboard"))
         # Mask URI
         masked_uri = uri.split("@")[1] if "@" in uri else "Hidden"
-        return func.HttpResponse(json.dumps({
+        return func.HttpResponse(
+          json.dumps({
             "db_name_in_use": db_name,
             "mongo_host_redacted": masked_uri,
             "collections_confirmed": ["Public_Leaderboard", "MF_SIP_Leaderboard", "Insurance_Policy_Scoring", "Config"]
-        }), mimetype="application/json")
+          }),
+          mimetype="application/json",
+          headers={
+            "Access-Control-Allow-Origin": "http://localhost:5173",
+            "Access-Control-Allow-Credentials": "true",
+          })
 
     return func.HttpResponse("Not Found", status_code=404)
 
@@ -92,6 +106,8 @@ def json_serial(obj):
     return str(obj)
 
 def get_leaderboard(req):
+    if req.method == "OPTIONS":
+        return options_response()
     # Query Params
     try:
         month = req.params.get("month")
@@ -238,7 +254,11 @@ def get_leaderboard(req):
 
         return func.HttpResponse(
             json.dumps(final_list, default=json_serial),
-            mimetype="application/json"
+            mimetype="application/json",
+            headers={
+              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Credentials": "true",
+            }
         )
 
     except Exception as e:
@@ -246,9 +266,19 @@ def get_leaderboard(req):
         return func.HttpResponse("Internal Server Error", status_code=500)
 
 def get_me(req):
-    email = rbac.get_user_email(req)
+    if req.method == "OPTIONS":
+        return options_response()
+    
+    # email = rbac.get_user_email(req)
+    email = auth_utils.get_email_from_jwt_cookie(req)
     if not email:
-        return func.HttpResponse("Unauthorized", status_code=401)
+        return func.HttpResponse(
+            "Unauthorized",
+            status_code=401, 
+            headers={
+              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Credentials": "true",
+            })
 
     # Lookup Employee ID from Email via Zoho_Users
     db = get_db()
@@ -264,12 +294,18 @@ def get_me(req):
     return fetch_user_stats(req, eid)
 
 def get_user(req, employee_id):
+    if req.method == "OPTIONS":
+        return options_response()
+    
     # NOTE: Authorization Check should happen at Gateway Level via RBAC Service.
     # But as defense in depth, we could check headers here if forwarded.
     # For now, we trust the Gateway to only let Admins hit this.
     return fetch_user_stats(req, employee_id)
 
 def fetch_user_stats(req, eid):
+    if req.method == "OPTIONS":
+        return options_response()
+
     db = get_db()
     month = req.params.get("month", datetime.utcnow().strftime("%Y-%m"))
 
@@ -287,7 +323,14 @@ def fetch_user_stats(req, eid):
             row = db.Public_Leaderboard.find_one({"rm_name": eid, "period_month": month})
 
     if not row:
-        return func.HttpResponse(json.dumps({}), mimetype="application/json")
+        return func.HttpResponse(
+            json.dumps({}),
+            mimetype="application/json",
+            headers={
+              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Credentials": "true",
+            }
+        )
 
     # Adjustments - try both employee_id and rm_name
     adjs = list(db.Leaderboard_Adjustments.find({"employee_id": eid, "month": month, "status": "APPROVED"}))
@@ -307,11 +350,22 @@ def fetch_user_stats(req, eid):
     out["adjustments"] = applied
     out.pop("_id", None)
 
-    return func.HttpResponse(json.dumps(out, default=json_serial), mimetype="application/json")
+    return func.HttpResponse(
+        json.dumps(out, default=json_serial), 
+        mimetype="application/json",
+        headers={
+          "Access-Control-Allow-Origin": "http://localhost:5173",
+          "Access-Control-Allow-Credentials": "true",
+        }
+    )
 
 def get_me_breakdown(req):
+    if req.method == "OPTIONS":
+        return options_response()
+
     # Authenticate
-    email = rbac.get_user_email(req)
+    # email = rbac.get_user_email(req)
+    email = auth_utils.get_email_from_jwt_cookie(req)
     if not email: return func.HttpResponse("Unauthorized", status_code=401)
 
     db = get_db()
@@ -322,10 +376,16 @@ def get_me_breakdown(req):
     return fetch_user_breakdown(req, eid)
 
 def get_user_breakdown(req, employee_id):
+    if req.method == "OPTIONS":
+        return options_response()
+
     # Trust Gateway AuthZ
     return fetch_user_breakdown(req, employee_id)
 
 def fetch_user_breakdown(req, eid):
+    if req.method == "OPTIONS":
+        return options_response()
+    
     month = req.params.get("month", datetime.utcnow().strftime("%Y-%m"))
     db = get_db()
 
@@ -491,9 +551,19 @@ def fetch_user_breakdown(req, eid):
     # Sanitize NaN/Infinity values before JSON serialization
     res = sanitize_for_json(res)
 
-    return func.HttpResponse(json.dumps(res, default=json_serial), mimetype="application/json")
+    return func.HttpResponse(
+        json.dumps(res, default=json_serial), 
+        mimetype="application/json",
+        headers={
+          "Access-Control-Allow-Origin": "http://localhost:5173",
+          "Access-Control-Allow-Credentials": "true",
+        }
+    )
 
 def get_team_view(req):
+    if req.method == "OPTIONS":
+        return options_response()
+    
     """
     GET /api/leaderboard/team-view?month=YYYY-MM
     Returns aggregated team data for a given month.
@@ -501,7 +571,8 @@ def get_team_view(req):
     RBAC: Requires admin or superadmin role.
     """
     # RBAC Check
-    user_email = rbac.get_user_email(req)
+    # user_email = rbac.get_user_email(req)
+    user_email = auth_utils.get_email_from_jwt_cookie(req)
     if not rbac.is_admin(user_email):
         # Dev-only debug information
         is_dev = os.getenv("AZURE_FUNCTIONS_ENVIRONMENT") != "Production" or os.getenv("DEBUG_RBAC") == "1"
@@ -511,7 +582,11 @@ def get_team_view(req):
         return func.HttpResponse(
             json.dumps(error_response),
             status_code=403,
-            mimetype="application/json"
+            mimetype="application/json",
+            headers={
+              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Credentials": "true",
+            }
         )
 
     try:
@@ -590,7 +665,14 @@ def get_team_view(req):
             })
 
         res = {"month": month, "teams": teams}
-        return func.HttpResponse(json.dumps(res, default=json_serial), mimetype="application/json")
+        return func.HttpResponse(
+            json.dumps(res, default=json_serial), 
+            mimetype="application/json",
+            headers={
+              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Credentials": "true",
+            }
+        )
 
     except Exception as e:
         logging.exception(f"ERROR in get_team_view: {str(e)}")
@@ -606,8 +688,15 @@ def get_team_view(req):
             }
         else:
             error_response = {"error": "Internal Server Error"}
-
-        return func.HttpResponse(json.dumps(error_response), status_code=500, mimetype="application/json")
+            return func.HttpResponse(
+                json.dumps(error_response), 
+                status_code=500, 
+                mimetype="application/json",
+                headers={
+                "Access-Control-Allow-Origin": "http://localhost:5173",
+                "Access-Control-Allow-Credentials": "true",
+                }
+            )
 
     """
     GET /api/leaderboard/team-view?month=YYYY-MM
@@ -616,7 +705,8 @@ def get_team_view(req):
     RBAC: Requires admin or superadmin role.
     """
     # RBAC Check
-    user_email = rbac.get_user_email(req)
+    # user_email = rbac.get_user_email(req)
+    user_email = auth_utils.get_email_from_jwt_cookie(req)
     if not rbac.is_admin(user_email):
         # Dev-only debug information
         is_dev = os.getenv("AZURE_FUNCTIONS_ENVIRONMENT") != "Production" or os.getenv("DEBUG_RBAC") == "1"
@@ -626,7 +716,11 @@ def get_team_view(req):
         return func.HttpResponse(
             json.dumps(error_response),
             status_code=403,
-            mimetype="application/json"
+            mimetype="application/json",
+            headers={
+              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Credentials": "true",
+            }
         )
 
     try:
@@ -690,7 +784,11 @@ def get_team_view(req):
 
         return func.HttpResponse(
             json.dumps(res, default=json_serial),
-            mimetype="application/json"
+            mimetype="application/json",
+            headers={
+              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Credentials": "true",
+            }
         )
 
     except Exception as e:
@@ -716,13 +814,20 @@ def get_team_view(req):
         return func.HttpResponse(
             json.dumps(error_response),
             status_code=500,
-            mimetype="application/json"
+            mimetype="application/json",
+            headers={
+              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Credentials": "true",
+            }
         )
 
 
 
 
 def get_team_view_members(req):
+    if req.method == "OPTIONS":
+        return options_response()
+    
     """
     GET /api/leaderboard/team-view/members?month=YYYY-MM&group_type=team|manager|unassigned&group_key=XXX
     Returns members for a specific team/group for a given month.
@@ -730,7 +835,8 @@ def get_team_view_members(req):
     RBAC: Requires admin or superadmin role.
     """
     # RBAC Check
-    user_email = rbac.get_user_email(req)
+    # user_email = rbac.get_user_email(req)
+    user_email = auth_utils.get_email_from_jwt_cookie(req)
     if not rbac.is_admin(user_email):
         # Dev-only debug information
         is_dev = os.getenv("AZURE_FUNCTIONS_ENVIRONMENT") != "Production" or os.getenv("DEBUG_RBAC") == "1"
@@ -740,7 +846,11 @@ def get_team_view_members(req):
         return func.HttpResponse(
             json.dumps(error_response),
             status_code=403,
-            mimetype="application/json"
+            mimetype="application/json",
+            headers={
+              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Credentials": "true",
+            }
         )
 
     try:
@@ -752,14 +862,22 @@ def get_team_view_members(req):
             return func.HttpResponse(
                 json.dumps({"error": "month parameter required"}),
                 status_code=400,
-                mimetype="application/json"
+                mimetype="application/json",
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:5173",
+                    "Access-Control-Allow-Credentials": "true",
+                }
             )
 
         if not group_type or not group_key:
             return func.HttpResponse(
                 json.dumps({"error": "group_type and group_key parameters required"}),
                 status_code=400,
-                mimetype="application/json"
+                mimetype="application/json",
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:5173",
+                    "Access-Control-Allow-Credentials": "true",
+                }
             )
 
         db = get_db()
@@ -779,7 +897,11 @@ def get_team_view_members(req):
             return func.HttpResponse(
                 json.dumps({"error": f"Invalid group_type: {group_type}. Must be team, manager, or unassigned"}),
                 status_code=400,
-                mimetype="application/json"
+                mimetype="application/json",
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:5173",
+                    "Access-Control-Allow-Credentials": "true",
+                }
             )
 
         # Query members
@@ -844,7 +966,11 @@ def get_team_view_members(req):
                 "manager_name": manager_name,
                 "members": members
             }, default=json_serial),
-            mimetype="application/json"
+            mimetype="application/json",
+            headers={
+              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Credentials": "true",
+            }
         )
 
     except Exception as e:
@@ -852,18 +978,26 @@ def get_team_view_members(req):
         return func.HttpResponse(
             json.dumps({"error": str(e)}),
             status_code=500,
-            mimetype="application/json"
+            mimetype="application/json",
+            headers={
+              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Credentials": "true",
+            }
         )
 
 
 def get_all_breakdown(req):
+    if req.method == "OPTIONS":
+        return options_response()
+    
     """
     GET /api/leaderboard/breakdown?month=YYYY-MM&group_key=MASTER_TEAM
     Returns granular breakdown data for active and inactive RMs.
     Supports virtual grouping (MASTER_TEAM) to return all RMs.
     """
     # RBAC Check (Admin/Superadmin only)
-    user_email = rbac.get_user_email(req)
+    # user_email = rbac.get_user_email(req)
+    user_email = auth_utils.get_email_from_jwt_cookie(req)
     if not rbac.is_admin(user_email):
          # Dev check
          is_dev = os.getenv("AZURE_FUNCTIONS_ENVIRONMENT") != "Production" or os.getenv("DEBUG_RBAC") == "1"
@@ -949,4 +1083,11 @@ def get_all_breakdown(req):
         "members": members
     }
 
-    return func.HttpResponse(json.dumps(res, default=json_serial), mimetype="application/json")
+    return func.HttpResponse(
+        json.dumps(res, default=json_serial), 
+        mimetype="application/json",
+        headers={
+            "Access-Control-Allow-Origin": "http://localhost:5173",
+            "Access-Control-Allow-Credentials": "true",
+        }
+    )

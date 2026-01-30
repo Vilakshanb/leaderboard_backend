@@ -5,6 +5,8 @@ import os
 import pymongo
 from bson import ObjectId
 from datetime import datetime
+
+from utils import auth_utils
 from ..utils import rbac
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
@@ -27,7 +29,8 @@ def get_db():
     return client[db_name]
 
 def upsert_event(req):
-    email = rbac.get_user_email(req)
+    # email = rbac.get_user_email(req)
+    email = auth_utils.get_email_from_jwt_cookie(req)
     if not email: return func.HttpResponse("Unauthorized", status_code=401)
 
     try:
@@ -83,7 +86,8 @@ def upsert_event(req):
 
 def get_leaderboard(req):
     # Auth?
-    email = rbac.get_user_email(req)
+    # email = rbac.get_user_email(req)
+    email = auth_utils.get_email_from_jwt_cookie(req)
     if not email: return func.HttpResponse("Unauthorized", status_code=401)
 
     month = req.params.get("month", datetime.utcnow().strftime("%Y-%m"))
@@ -94,7 +98,8 @@ def get_leaderboard(req):
     return func.HttpResponse(json.dumps(list(cursor), default=str), mimetype="application/json")
 
 def get_me(req):
-    email = rbac.get_user_email(req)
+    # email = rbac.get_user_email(req)
+    email = auth_utils.get_email_from_jwt_cookie(req)
     if not email: return func.HttpResponse("Unauthorized", status_code=401)
 
     db = get_db()

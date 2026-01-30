@@ -4,7 +4,7 @@ import datetime
 import json
 from bson import json_util
 
-uri = "mongodb+srv://Vilakshanb:TIW0YwgQNaI8iMSc@milestone.wftaulr.mongodb.net/PLI_Leaderboard?retryWrites=true&w=majority"
+uri = os.getenv("MONGODB_CONNECTION_STRING")
 client = pymongo.MongoClient(uri)
 db = client["PLI_Leaderboard"]
 

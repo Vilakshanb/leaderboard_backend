@@ -2,7 +2,7 @@ from pymongo import MongoClient
 import os
 from datetime import datetime
 
-CONN = "mongodb+srv://Vilakshanb:TIW0YwgQNaI8iMSc@milestone.wftaulr.mongodb.net/?retryWrites=true&w=majority"
+CONN = os.getenv("MONGODB_CONNECTION_STRING")
 c = MongoClient(CONN)
 db_v2 = c['PLI_Leaderboard_v2']
 

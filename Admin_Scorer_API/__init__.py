@@ -134,7 +134,11 @@ def get_config(module: str):
             "schema_version": SCHEMA_VERSION if module == 'lumpsum' else SCHEMA_VERSION_SIP
         }, default=str),
         mimetype="application/json",
-        headers={"X-DB-Name": DB_NAME}
+        headers={
+            "X-DB-Name": DB_NAME,
+            "Access-Control-Allow-Origin": "http://localhost:5173",
+            "Access-Control-Allow-Credentials": "true",
+        }
     )
 
 def update_config(req, module: str):
@@ -148,7 +152,15 @@ def update_config(req, module: str):
     # VALIDATION LOGIC 1:1 with Python constraints
     errors = validate_config(module, body)
     if errors:
-        return func.HttpResponse(json.dumps({"errors": errors}), status_code=400, mimetype="application/json")
+        return func.HttpResponse(
+            json.dumps({"errors": errors}), 
+            status_code=400, 
+            mimetype="application/json",
+            headers={
+              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Credentials": "true",
+            } 
+            )
 
     # PERSISTENCE
     if module == 'lumpsum':

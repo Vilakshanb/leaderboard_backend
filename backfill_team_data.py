@@ -5,7 +5,7 @@ from datetime import datetime
 
 # Connection
 # Hardcoded for verification/backfill script
-mongo_conn_str = "mongodb+srv://Vilakshanb:TIW0YwgQNaI8iMSc@milestone.wftaulr.mongodb.net/?retryWrites=true&w=majority"
+mongo_conn_str = os.getenv("MONGODB_CONNECTION_STRING")
 db_name = "PLI_Leaderboard_v2"
 
 client = pymongo.MongoClient(mongo_conn_str)

@@ -3,7 +3,7 @@ import pymongo
 import datetime
 
 def generate_audit_report():
-    client = pymongo.MongoClient("mongodb+srv://Vilakshanb:TIW0YwgQNaI8iMSc@milestone.wftaulr.mongodb.net/?retryWrites=true&w=majority")
+    client = pymongo.MongoClient(os.getenv("MONGODB_CONNECTION_STRING"))
     db = client["PLI_Leaderboard_v2"]
 
     # 1. Identify Inactive RMs

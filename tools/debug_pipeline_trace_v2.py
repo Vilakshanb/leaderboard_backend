@@ -14,7 +14,7 @@ month = "2025-05"
 start = datetime.datetime(2025, 5, 1)
 end = datetime.datetime(2025, 6, 1)
 
-client = pymongo.MongoClient("mongodb+srv://Vilakshanb:TIW0YwgQNaI8iMSc@milestone.wftaulr.mongodb.net/?retryWrites=true&w=majority")
+client = pymongo.MongoClient(os.getenv("MONGODB_CONNECTION_STRING"))
 db = client["PLI_Leaderboard_v2"]
 
 print(f"Tracing using ACTUAL pipeline for {month}...")
