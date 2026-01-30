@@ -5,16 +5,9 @@ import os
 import pymongo
 from bson import ObjectId
 from datetime import datetime
-
-from utils.http import options_response
-from utils import auth_utils
 from ..utils import rbac
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
-    if req.method == "OPTIONS":
-        return options_response()
-    
-
     method = req.method
     action = req.route_params.get("action", "")
 
@@ -28,44 +21,23 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     elif method == "POST" and action == "update":
         return update_dispute(req)
 
-    return func.HttpResponse(
-        "Not Found",
-        status_code=404,
-        headers={
-            "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-            "Access-Control-Allow-Credentials": "true",
-        })
+    return func.HttpResponse("Not Found", status_code=404)
 
 def get_db():
-    uri = os.getenv("MONGODB_CONNECTION_STRING")
+    uri = os.getenv("MongoDb-Connection-String")
     client = pymongo.MongoClient(uri)
     db_name = os.getenv("PLI_DB_NAME", "PLI_Leaderboard")
     return client[db_name]
 
 def create_dispute(req):
     # Auth: Any authenticated user
-    # email = rbac.get_user_email(req)
-    email = auth_utils.get_email_from_jwt_cookie(req)
-    if not email: return func.HttpResponse(
-        "Unauthorized", 
-        status_code=401,
-        headers={
-          "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-          "Access-Control-Allow-Credentials": "true",
-        } 
-    )
+    email = rbac.get_user_email(req)
+    if not email: return func.HttpResponse("Unauthorized", status_code=401)
 
     try:
         body = req.get_json()
     except:
-        return func.HttpResponse(
-            "Invalid JSON", 
-            status_code=400,
-            headers={
-              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-              "Access-Control-Allow-Credentials": "true",
-            } 
-        )
+        return func.HttpResponse("Invalid JSON", status_code=400)
 
     # Resolve Employee ID
     db = get_db()
@@ -75,26 +47,12 @@ def create_dispute(req):
     # Plan says: "Team creates dispute".
 
     user = db.Zoho_Users.find_one({"email": {"$regex": f"^{email}$", "$options": "i"}})
-    if not user: return func.HttpResponse(
-        "User not linked", 
-        status_code=403,
-        headers={
-          "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-          "Access-Control-Allow-Credentials": "true",
-        } 
-    )
+    if not user: return func.HttpResponse("User not linked", status_code=403)
     eid = user.get("id")
 
     required = ["month", "scope", "message"]
     if not all(k in body for k in required):
-        return func.HttpResponse(
-            "Missing fields", 
-            status_code=400,
-            headers={
-              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-              "Access-Control-Allow-Credentials": "true",
-            } 
-        )
+        return func.HttpResponse("Missing fields", status_code=400)
 
     doc = {
         "employee_id": eid,
@@ -119,63 +77,24 @@ def create_dispute(req):
     }
 
     res = db.Leaderboard_Disputes.insert_one(doc)
-    return func.HttpResponse(
-        json.dumps({"id": str(res.inserted_id), "status": "OPEN"}),
-        mimetype="application/json",
-        headers={
-            "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-            "Access-Control-Allow-Credentials": "true",
-        }
-
-    )
+    return func.HttpResponse(json.dumps({"id": str(res.inserted_id), "status": "OPEN"}), mimetype="application/json")
 
 def get_my_disputes(req):
-    # email = rbac.get_user_email(req)
-    email = auth_utils.get_email_from_jwt_cookie(req)
-    if not email: return func.HttpResponse(
-        "Unauthorized", 
-        status_code=401,
-        headers={
-          "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-          "Access-Control-Allow-Credentials": "true",
-        } 
-    )
+    email = rbac.get_user_email(req)
+    if not email: return func.HttpResponse("Unauthorized", status_code=401)
 
     db = get_db()
     user = db.Zoho_Users.find_one({"email": {"$regex": f"^{email}$", "$options": "i"}})
-    if not user: return func.HttpResponse(
-        "User not linked", 
-        status_code=403,
-        headers={
-          "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-          "Access-Control-Allow-Credentials": "true",
-        } 
-    )
+    if not user: return func.HttpResponse("User not linked", status_code=403)
     eid = user.get("id")
 
     cursor = db.Leaderboard_Disputes.find({"employee_id": eid}).sort("created_at", -1)
-    return func.HttpResponse(
-        json.dumps(list(cursor),
-        default=str),
-        mimetype="application/json",
-        headers={
-            "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-            "Access-Control-Allow-Credentials": "true",
-        }
-    )
+    return func.HttpResponse(json.dumps(list(cursor), default=str), mimetype="application/json")
 
 def list_disputes_manager(req):
-    # email = rbac.get_user_email(req)
-    email = auth_utils.get_email_from_jwt_cookie(req)
+    email = rbac.get_user_email(req)
     if not rbac.is_manager(email):
-        return func.HttpResponse(
-            "Forbidden", 
-            status_code=403,
-            headers={
-              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-              "Access-Control-Allow-Credentials": "true",
-            } 
-        )
+        return func.HttpResponse("Forbidden", status_code=403)
 
     query = {}
     # Filters
@@ -185,27 +104,12 @@ def list_disputes_manager(req):
 
     db = get_db()
     cursor = db.Leaderboard_Disputes.find(query).sort("created_at", -1)
-    return func.HttpResponse(
-        json.dumps(list(cursor), default=str), 
-        mimetype="application/json",
-        headers={
-            "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-            "Access-Control-Allow-Credentials": "true",
-        }
-    )
+    return func.HttpResponse(json.dumps(list(cursor), default=str), mimetype="application/json")
 
 def update_dispute(req):
-    # email = rbac.get_user_email(req)
-    email = auth_utils.get_email_from_jwt_cookie(req)
+    email = rbac.get_user_email(req)
     if not rbac.is_manager(email):
-        return func.HttpResponse(
-            "Forbidden", 
-            status_code=403,
-            headers={
-              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-              "Access-Control-Allow-Credentials": "true",
-            } 
-        )
+        return func.HttpResponse("Forbidden", status_code=403)
 
     try:
         body = req.get_json()
@@ -213,14 +117,7 @@ def update_dispute(req):
         action = body["resolution"]["action"] # ADJUSTMENT_CREATED etc
         status = body["status"] # RESOLVED/REJECTED/ACK
     except:
-        return func.HttpResponse(
-            "Invalid Payload", 
-            status_code=400,
-            headers={
-              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-              "Access-Control-Allow-Credentials": "true",
-            } 
-        )
+        return func.HttpResponse("Invalid Payload", status_code=400)
 
     db = get_db()
 
@@ -228,14 +125,7 @@ def update_dispute(req):
     if action == "ADJUSTMENT_CREATED":
         adj_id = body.get("resolution", {}).get("adjustment_id")
         if not adj_id:
-            return func.HttpResponse(
-                "Must provide adjustment_id for this action", 
-                status_code=400,
-                headers={
-                    "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-                    "Access-Control-Allow-Credentials": "true",
-                } 
-            )
+             return func.HttpResponse("Must provide adjustment_id for this action", status_code=400)
 
     update = {
         "$set": {
@@ -261,20 +151,6 @@ def update_dispute(req):
 
     res = db.Leaderboard_Disputes.update_one({"_id": ObjectId(did)}, update)
     if res.matched_count == 0:
-        return func.HttpResponse(
-            "Dispute not found", 
-            status_code=404,
-            headers={
-                "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-                "Access-Control-Allow-Credentials": "true",
-            }            
-        )
+        return func.HttpResponse("Dispute not found", status_code=404)
 
-    return func.HttpResponse(
-        json.dumps({"id": did, "status": status}),
-        mimetype="application/json",
-        headers={
-            "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
-            "Access-Control-Allow-Credentials": "true",
-        }
-    )
+    return func.HttpResponse(json.dumps({"id": did, "status": status}), mimetype="application/json")

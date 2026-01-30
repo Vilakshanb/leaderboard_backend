@@ -65,10 +65,7 @@ def get_email_from_jwt_cookie(req: func.HttpRequest) -> str | None:
     """
     Extracts the JWT from the cookie and returns the email if valid.
     """
-    logging.info(f"Incoming headers: {dict(req.headers)}")
-
     cookie_header = req.headers.get("Cookie")
-
     if not cookie_header:
         # Try checking Authorization header as fallback (Bearer token)
         auth_header = req.headers.get("Authorization")
@@ -76,11 +73,10 @@ def get_email_from_jwt_cookie(req: func.HttpRequest) -> str | None:
             token = auth_header.split(" ")[1]
             payload = verify_jwt_token(token)
             if payload:
-                print(f"payload data: {payload}")
                 return payload.get("email") or payload.get("preferred_username") or payload.get("upn")
         return None
 
-    cookie_name = os.getenv("JWT_COOKIE_NAME", "internal_token")
+    cookie_name = os.getenv("JWT_COOKIE_NAME", "auth_token")
 
     try:
         simple_cookie = SimpleCookie()
