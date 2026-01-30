@@ -2,12 +2,13 @@
 import requests
 import json
 import sys
+import os
 
 # Call local API to get leaderboard for May 2025
 url = "http://localhost:7071/api/leaderboard?month=2025-05"
 headers = {
     "x-ms-client-principal-name": "vilakshan@niveshonline.com",
-    "Access-Control-Allow-Origin": "http://localhost:5173",
+    "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
     "Access-Control-Allow-Credentials": "true",
 }
 

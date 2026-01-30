@@ -32,7 +32,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         "Not Found",
         status_code=404,
         headers={
-            "Access-Control-Allow-Origin": "http://localhost:5173",
+            "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
             "Access-Control-Allow-Credentials": "true",
         })
 
@@ -50,7 +50,7 @@ def create_dispute(req):
         "Unauthorized", 
         status_code=401,
         headers={
-          "Access-Control-Allow-Origin": "http://localhost:5173",
+          "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
           "Access-Control-Allow-Credentials": "true",
         } 
     )
@@ -62,7 +62,7 @@ def create_dispute(req):
             "Invalid JSON", 
             status_code=400,
             headers={
-              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
               "Access-Control-Allow-Credentials": "true",
             } 
         )
@@ -79,7 +79,7 @@ def create_dispute(req):
         "User not linked", 
         status_code=403,
         headers={
-          "Access-Control-Allow-Origin": "http://localhost:5173",
+          "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
           "Access-Control-Allow-Credentials": "true",
         } 
     )
@@ -91,7 +91,7 @@ def create_dispute(req):
             "Missing fields", 
             status_code=400,
             headers={
-              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
               "Access-Control-Allow-Credentials": "true",
             } 
         )
@@ -123,7 +123,7 @@ def create_dispute(req):
         json.dumps({"id": str(res.inserted_id), "status": "OPEN"}),
         mimetype="application/json",
         headers={
-            "Access-Control-Allow-Origin": "http://localhost:5173",
+            "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
             "Access-Control-Allow-Credentials": "true",
         }
 
@@ -136,7 +136,7 @@ def get_my_disputes(req):
         "Unauthorized", 
         status_code=401,
         headers={
-          "Access-Control-Allow-Origin": "http://localhost:5173",
+          "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
           "Access-Control-Allow-Credentials": "true",
         } 
     )
@@ -147,7 +147,7 @@ def get_my_disputes(req):
         "User not linked", 
         status_code=403,
         headers={
-          "Access-Control-Allow-Origin": "http://localhost:5173",
+          "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
           "Access-Control-Allow-Credentials": "true",
         } 
     )
@@ -159,7 +159,7 @@ def get_my_disputes(req):
         default=str),
         mimetype="application/json",
         headers={
-            "Access-Control-Allow-Origin": "http://localhost:5173",
+            "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
             "Access-Control-Allow-Credentials": "true",
         }
     )
@@ -172,7 +172,7 @@ def list_disputes_manager(req):
             "Forbidden", 
             status_code=403,
             headers={
-              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
               "Access-Control-Allow-Credentials": "true",
             } 
         )
@@ -189,7 +189,7 @@ def list_disputes_manager(req):
         json.dumps(list(cursor), default=str), 
         mimetype="application/json",
         headers={
-            "Access-Control-Allow-Origin": "http://localhost:5173",
+            "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
             "Access-Control-Allow-Credentials": "true",
         }
     )
@@ -202,7 +202,7 @@ def update_dispute(req):
             "Forbidden", 
             status_code=403,
             headers={
-              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
               "Access-Control-Allow-Credentials": "true",
             } 
         )
@@ -217,7 +217,7 @@ def update_dispute(req):
             "Invalid Payload", 
             status_code=400,
             headers={
-              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
               "Access-Control-Allow-Credentials": "true",
             } 
         )
@@ -232,7 +232,7 @@ def update_dispute(req):
                 "Must provide adjustment_id for this action", 
                 status_code=400,
                 headers={
-                    "Access-Control-Allow-Origin": "http://localhost:5173",
+                    "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
                     "Access-Control-Allow-Credentials": "true",
                 } 
             )
@@ -265,7 +265,7 @@ def update_dispute(req):
             "Dispute not found", 
             status_code=404,
             headers={
-                "Access-Control-Allow-Origin": "http://localhost:5173",
+                "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
                 "Access-Control-Allow-Credentials": "true",
             }            
         )
@@ -274,7 +274,7 @@ def update_dispute(req):
         json.dumps({"id": did, "status": status}),
         mimetype="application/json",
         headers={
-            "Access-Control-Allow-Origin": "http://localhost:5173",
+            "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
             "Access-Control-Allow-Credentials": "true",
         }
     )

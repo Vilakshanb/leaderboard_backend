@@ -49,7 +49,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             json.dumps({"status": "ok", "service": "leaderboard-api"}),
             mimetype="application/json",
             headers={
-              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
               "Access-Control-Allow-Credentials": "true",
             }
         )
@@ -66,7 +66,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
           }),
           mimetype="application/json",
           headers={
-            "Access-Control-Allow-Origin": "http://localhost:5173",
+            "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
             "Access-Control-Allow-Credentials": "true",
           })
 
@@ -256,7 +256,7 @@ def get_leaderboard(req):
             json.dumps(final_list, default=json_serial),
             mimetype="application/json",
             headers={
-              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
               "Access-Control-Allow-Credentials": "true",
             }
         )
@@ -276,7 +276,7 @@ def get_me(req):
             "Unauthorized",
             status_code=401, 
             headers={
-              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
               "Access-Control-Allow-Credentials": "true",
             })
 
@@ -327,7 +327,7 @@ def fetch_user_stats(req, eid):
             json.dumps({}),
             mimetype="application/json",
             headers={
-              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
               "Access-Control-Allow-Credentials": "true",
             }
         )
@@ -354,7 +354,7 @@ def fetch_user_stats(req, eid):
         json.dumps(out, default=json_serial), 
         mimetype="application/json",
         headers={
-          "Access-Control-Allow-Origin": "http://localhost:5173",
+          "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
           "Access-Control-Allow-Credentials": "true",
         }
     )
@@ -555,7 +555,7 @@ def fetch_user_breakdown(req, eid):
         json.dumps(res, default=json_serial), 
         mimetype="application/json",
         headers={
-          "Access-Control-Allow-Origin": "http://localhost:5173",
+          "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
           "Access-Control-Allow-Credentials": "true",
         }
     )
@@ -584,7 +584,7 @@ def get_team_view(req):
             status_code=403,
             mimetype="application/json",
             headers={
-              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
               "Access-Control-Allow-Credentials": "true",
             }
         )
@@ -669,7 +669,7 @@ def get_team_view(req):
             json.dumps(res, default=json_serial), 
             mimetype="application/json",
             headers={
-              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
               "Access-Control-Allow-Credentials": "true",
             }
         )
@@ -693,7 +693,7 @@ def get_team_view(req):
                 status_code=500, 
                 mimetype="application/json",
                 headers={
-                "Access-Control-Allow-Origin": "http://localhost:5173",
+                "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
                 "Access-Control-Allow-Credentials": "true",
                 }
             )
@@ -718,7 +718,7 @@ def get_team_view(req):
             status_code=403,
             mimetype="application/json",
             headers={
-              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
               "Access-Control-Allow-Credentials": "true",
             }
         )
@@ -786,7 +786,7 @@ def get_team_view(req):
             json.dumps(res, default=json_serial),
             mimetype="application/json",
             headers={
-              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
               "Access-Control-Allow-Credentials": "true",
             }
         )
@@ -816,7 +816,7 @@ def get_team_view(req):
             status_code=500,
             mimetype="application/json",
             headers={
-              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
               "Access-Control-Allow-Credentials": "true",
             }
         )
@@ -848,7 +848,7 @@ def get_team_view_members(req):
             status_code=403,
             mimetype="application/json",
             headers={
-              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
               "Access-Control-Allow-Credentials": "true",
             }
         )
@@ -864,7 +864,7 @@ def get_team_view_members(req):
                 status_code=400,
                 mimetype="application/json",
                 headers={
-                    "Access-Control-Allow-Origin": "http://localhost:5173",
+                    "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
                     "Access-Control-Allow-Credentials": "true",
                 }
             )
@@ -875,7 +875,7 @@ def get_team_view_members(req):
                 status_code=400,
                 mimetype="application/json",
                 headers={
-                    "Access-Control-Allow-Origin": "http://localhost:5173",
+                    "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
                     "Access-Control-Allow-Credentials": "true",
                 }
             )
@@ -899,7 +899,7 @@ def get_team_view_members(req):
                 status_code=400,
                 mimetype="application/json",
                 headers={
-                    "Access-Control-Allow-Origin": "http://localhost:5173",
+                    "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
                     "Access-Control-Allow-Credentials": "true",
                 }
             )
@@ -968,7 +968,7 @@ def get_team_view_members(req):
             }, default=json_serial),
             mimetype="application/json",
             headers={
-              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
               "Access-Control-Allow-Credentials": "true",
             }
         )
@@ -980,7 +980,7 @@ def get_team_view_members(req):
             status_code=500,
             mimetype="application/json",
             headers={
-              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
               "Access-Control-Allow-Credentials": "true",
             }
         )
@@ -1087,7 +1087,7 @@ def get_all_breakdown(req):
         json.dumps(res, default=json_serial), 
         mimetype="application/json",
         headers={
-            "Access-Control-Allow-Origin": "http://localhost:5173",
+            "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
             "Access-Control-Allow-Credentials": "true",
         }
     )

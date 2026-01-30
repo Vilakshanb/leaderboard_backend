@@ -71,7 +71,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 status_code=401,
                 mimetype="application/json",
                 headers={
-                    "Access-Control-Allow-Origin": "http://localhost:5173",
+                    "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
                     "Access-Control-Allow-Credentials": "true",
                 } 
             )
@@ -100,7 +100,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             status_code=200,
             mimetype="application/json",
             headers={
-                "Access-Control-Allow-Origin": "http://localhost:5173",
+                "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
                 "Access-Control-Allow-Credentials": "true",
                 "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
                 "Access-Control-Allow-Headers": "Content-Type, Authorization"
@@ -113,7 +113,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             status_code=500,
             mimetype="application/json",
             headers={
-                "Access-Control-Allow-Origin": "http://localhost:5173",
+                "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
                 "Access-Control-Allow-Credentials": "true",
             }
         )

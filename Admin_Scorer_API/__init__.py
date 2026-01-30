@@ -136,7 +136,7 @@ def get_config(module: str):
         mimetype="application/json",
         headers={
             "X-DB-Name": DB_NAME,
-            "Access-Control-Allow-Origin": "http://localhost:5173",
+            "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
             "Access-Control-Allow-Credentials": "true",
         }
     )
@@ -157,7 +157,7 @@ def update_config(req, module: str):
             status_code=400, 
             mimetype="application/json",
             headers={
-              "Access-Control-Allow-Origin": "http://localhost:5173",
+              "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
               "Access-Control-Allow-Credentials": "true",
             } 
             )
