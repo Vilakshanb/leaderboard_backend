@@ -17,6 +17,10 @@ def get_public_key():
         return None
 
     # Ensure correct PEM format if possibly stripped
+    # Ensure correct PEM format if possibly stripped or has escaped newlines
+    if "\\n" in public_key_str:
+        public_key_str = public_key_str.replace("\\n", "\n")
+        
     if not public_key_str.startswith("-----BEGIN PUBLIC KEY-----"):
         public_key_str = f"-----BEGIN PUBLIC KEY-----\n{public_key_str}\n-----END PUBLIC KEY-----"
 
