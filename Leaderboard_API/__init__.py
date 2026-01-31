@@ -586,9 +586,8 @@ def fetch_user_breakdown(req, eid):
                 # Connect to V2 DB for config
                 v2_db_name = os.getenv("PLI_DB_NAME", "PLI_Leaderboard_v2")
                 # Reuse UR from get_db() context or environment
-                mongo_uri = os.getenv("MongoDb-Connection-String")
-                client_v2 = pymongo.MongoClient(mongo_uri)
-                db_v2 = client_v2[v2_db_name]
+                # Reuse UR from get_db() context or environment
+                db_v2 = get_db(default_db=v2_db_name)
                 config_doc = db_v2.config.find_one({"_id": "Leaderboard_SIP"})
             except Exception as e:
                 logging.warning(f"Failed to fetch SIP config from V2 DB: {e}")
@@ -642,8 +641,7 @@ def fetch_user_breakdown(req, eid):
              # We reuse the logic from rupee incentive block, fetch Config if not loaded
              if "config_doc" not in locals() or not config_doc:
                  try:
-                    client_v2 = pymongo.MongoClient(os.getenv("MongoDb-Connection-String"))
-                    db_v2 = client_v2[os.getenv("PLI_DB_NAME", "PLI_Leaderboard_v2")]
+                    db_v2 = get_db()
                     config_doc = db_v2.config.find_one({"_id": "Leaderboard_Lumpsum"})
                  except:
                     config_doc = {}
