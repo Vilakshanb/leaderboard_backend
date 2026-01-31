@@ -256,13 +256,11 @@ DEFAULT_REFERRAL_CONFIG = {
 }
 
 def _get_db():
-    client = pymongo.MongoClient(MONGO_URI)
-    return client[DB_NAME]
+    return get_db(default_db=DB_NAME)
 
 def _get_db_v2():
     """Get v2 database for scoring config."""
-    client = pymongo.MongoClient(MONGO_URI)
-    return client[DB_NAME_V2]
+    return get_db(default_db=DB_NAME_V2)
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('Settings_API processed a request.')
@@ -811,11 +809,11 @@ except ImportError:
 
 import Leaderboard
 
-mongo_uri = os.environ.get("MongoDb-Connection-String")
-client = pymongo.MongoClient(mongo_uri)
-# Explicitly use V2 DB
-db_name = os.environ.get("PLI_DB_NAME", "PLI_Leaderboard_v2")
-db = client[db_name]
+# mongo_uri = os.environ.get("MongoDb-Connection-String")
+# client = pymongo.MongoClient(mongo_uri)
+# # Explicitly use V2 DB
+# db_name = os.environ.get("PLI_DB_NAME", "PLI_Leaderboard_v2")
+# db = get_db(default_db="PLI_Leaderboard_v2")
 
 
 # Month to process
