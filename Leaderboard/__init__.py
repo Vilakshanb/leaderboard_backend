@@ -14,6 +14,7 @@ else:  # pragma: no cover - azure runtime only
         func = None  # type: ignore[assignment]
 
 from pymongo import MongoClient
+from ..utils.db_utils import get_db_client
 
 # --- Azure Key Vault (guarded import) ---
 try:
@@ -59,7 +60,7 @@ def load_leaderboard_config(
         )
     db_name = db_name or DB_NAME
 
-    client = MongoClient(mongo_uri)
+    client = get_db_client(mongo_uri)
     db = client[db_name]
 
     # Expect a schema-style document similar to SIP_Schema, e.g.:

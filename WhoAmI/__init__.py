@@ -3,6 +3,7 @@ import azure.functions as func
 import json
 import os
 import pymongo
+from ..utils.db_utils import get_db
 from utils.auth_utils import get_email_from_jwt_cookie
 from utils.http import respond, options_response
 
@@ -40,11 +41,10 @@ def is_admin_inline(email: str) -> bool:
 
     # 2. Check DB
     try:
-        uri = os.getenv("MongoDb-Connection-String")
-        if uri:
-            client = pymongo.MongoClient(uri)
-            db = client[os.getenv("PLI_DB_NAME", "PLI_Leaderboard")]
-            user = db.Admin_Permissions.find_one({"email": email})
+    # 2. Check DB
+    try:
+        db = get_db()
+        user = db.Admin_Permissions.find_one({"email": email})
             if user:
                 roles = user.get("roles", [])
                 return "admin" in roles or "super_admin" in roles
@@ -73,7 +73,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 headers={
                     "Access-Control-Allow-Origin": os.getenv("ALLOWED_ORIGIN"),
                     "Access-Control-Allow-Credentials": "true",
-                } 
+                }
             )
 
         # 2. Resolve Roles

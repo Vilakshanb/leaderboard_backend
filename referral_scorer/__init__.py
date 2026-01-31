@@ -26,6 +26,7 @@ import pymongo
 import azure.functions as func
 from pymongo.errors import ConnectionFailure, BulkWriteError, ServerSelectionTimeoutError
 import datetime
+from ..utils.db_utils import get_db, get_db_client
 
 # --- Azure Key Vault imports ---
 import os
@@ -166,8 +167,8 @@ def connect_to_mongo(collection_name):
                 KV_SECRET_MONGO_CONNSTRING,
             )
             return None
-        # Ensure the MongoDB connection string is securely managed and correctly formatted
-        client = pymongo.MongoClient(conn, serverSelectionTimeoutMS=5000)
+
+        client = get_db_client(conn)
 
         # Attempt to retrieve the server information to verify the connection
         client.server_info()  # This will raise an exception if the connection fails
@@ -406,7 +407,8 @@ def fetch_active_employee_ids_from_mongo():
                 KV_SECRET_MONGO_CONNSTRING,
             )
             return None  # signal to bypass gating
-        client = pymongo.MongoClient(conn, serverSelectionTimeoutMS=5000)
+
+        client = get_db_client(conn)
         client.server_info()
         db = client["PLI_Leaderboard"]
         col_name = os.getenv("ZOHO_USERS_COLL", "Zoho_Users")
