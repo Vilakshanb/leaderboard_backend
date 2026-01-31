@@ -716,7 +716,8 @@ def load_insurance_runtime_config() -> dict:
             cfg = merged
 
         # --- 1. Load Weights & Rules ---
-        weights = doc.get("weights") or {}
+        # FIXED: Use 'weights' derived above from the nested config
+        weights = weights or {}
 
         # SHIM: Check for company_rules at root (UI style) if not in weights
         cr_root = stored_cfg.get("company_rules") or doc.get("company_rules")
