@@ -1,5 +1,6 @@
 import os
 import logging
+from .auth_utils import get_email_from_jwt_cookie
 
 def get_allowed_emails(env_var_name: str) -> set[str]:
     raw = os.getenv(env_var_name, "")
@@ -56,6 +57,10 @@ def is_admin(email: str) -> bool:
 def get_user_email(req) -> str | None:
     # 1. Try x-ms-client-principal-name (Azure App Service Auth) - ALWAYS honored
     val = req.headers.get("x-ms-client-principal-name")
+    if val: return val
+
+    # 1.5 Try JWT from Cookie (Shared logic)
+    val = get_email_from_jwt_cookie(req)
     if val: return val
 
     # 2. Dev/Test-only: Allow X-User-Email (for E2E tests, local development)
