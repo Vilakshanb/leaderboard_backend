@@ -40,14 +40,13 @@ def is_admin_inline(email: str) -> bool:
         return True
 
     # 2. Check DB
-    try:
     # 2. Check DB
     try:
         db = get_db()
         user = db.Admin_Permissions.find_one({"email": email})
-            if user:
-                roles = user.get("roles", [])
-                return "admin" in roles or "super_admin" in roles
+        if user:
+            roles = user.get("roles", [])
+            return "admin" in roles or "super_admin" in roles
     except Exception as e:
         logging.error(f"RBAC DB check failed: {e}")
 
