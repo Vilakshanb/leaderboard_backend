@@ -1,6 +1,7 @@
 import os
 import logging
 from .auth_utils import get_email_from_jwt_cookie
+from .db_utils import get_db
 
 def get_allowed_emails(env_var_name: str) -> set[str]:
     raw = os.getenv(env_var_name, "")
@@ -10,10 +11,7 @@ import pymongo
 
 def _get_db():
     try:
-        uri = os.getenv("MongoDb-Connection-String")
-        if not uri: return None
-        client = pymongo.MongoClient(uri)
-        return client[os.getenv("PLI_DB_NAME", "PLI_Leaderboard")]
+        return get_db(default_db="PLI_Leaderboard")
     except:
         return None
 

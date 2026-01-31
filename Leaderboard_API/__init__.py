@@ -6,6 +6,7 @@ import pymongo
 import pymongo
 from datetime import datetime, timezone
 from ..utils import rbac
+from ..utils.db_utils import get_db
 import concurrent.futures
 import sys
 import os
@@ -73,11 +74,11 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
     return func.HttpResponse("Not Found", status_code=404)
 
-def get_db():
-    uri = os.getenv("MongoDb-Connection-String")
-    client = pymongo.MongoClient(uri)
-    db_name = os.getenv("PLI_DB_NAME", os.getenv("DB_NAME", "PLI_Leaderboard_v2"))
-    return client[db_name]
+# def get_db(): # Replaced by utils
+#     uri = os.getenv("MongoDb-Connection-String")
+#     client = pymongo.MongoClient(uri)
+#     db_name = os.getenv("PLI_DB_NAME", os.getenv("DB_NAME", "PLI_Leaderboard_v2"))
+#     return client[db_name]
 
 def sanitize_for_json(obj):
     """Recursively replace NaN and Infinity with None in nested structures"""

@@ -14,6 +14,7 @@ import requests
 from pymongo.errors import DuplicateKeyError, PyMongoError
 import azure.functions as func
 from pymongo import ReturnDocument
+from ..utils.db_utils import get_db_client
 
 
 import atexit
@@ -2694,10 +2695,7 @@ def _get_leaderboard_db(client: pymongo.MongoClient | None = None):
     configured Mongo connection secret.
     """
     if client is None:
-        mongo_uri = get_secret(MONGODB_SECRET_NAME)
-        if not mongo_uri:
-            raise RuntimeError("Mongo connection string not available for leaderboard DB.")
-        client = pymongo.MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
+        client = get_db_client(serverSelectionTimeoutMS=5000)
     return client[LEADERBOARD_DB_NAME]
 
 

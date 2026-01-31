@@ -18,7 +18,9 @@ import numpy as np
 from pymongo import UpdateOne
 from pymongo import ReturnDocument
 import hashlib
+import hashlib
 import azure.functions as func
+from ..utils.db_utils import get_db_client
 
 # Let Azure Functions' worker manage handlers. Only set basicConfig if no handlers exist (local CLI / direct run).
 _root_logger = logging.getLogger()
@@ -1084,14 +1086,9 @@ def _get_mongo_client(mongo_uri: Optional[str] = None):
     """
     global _GLOBAL_MONGO_CLIENT
 
-    if mongo_uri is None:
-        mongo_uri = get_secret("MongoDb-Connection-String")
-    if not mongo_uri:
-        logging.error("MongoDB connection string not found in Key Vault or environment.")
-        raise RuntimeError("Missing MongoDB connection string")
-
     if "_GLOBAL_MONGO_CLIENT" not in globals() or _GLOBAL_MONGO_CLIENT is None:
-        _GLOBAL_MONGO_CLIENT = pymongo.MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
+        # Use centralized DB util
+        _GLOBAL_MONGO_CLIENT = get_db_client(serverSelectionTimeoutMS=5000)
         _GLOBAL_MONGO_CLIENT.server_info()  # validate early
         logging.info("Connected to MongoDB (new client).")
     else:

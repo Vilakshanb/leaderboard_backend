@@ -14,6 +14,7 @@ import pymongo
 import azure.functions as func
 from pymongo import UpdateOne
 from pymongo.errors import ServerSelectionTimeoutError, ConnectionFailure, BulkWriteError
+from ..utils.db_utils import get_db
 
 # === Insurance Bonuses (Quarterly & Annual) – now computed inside scorer ===
 # • Basis: ONLY fresh-to-company premium (pre-GST); renewal premium does NOT count.
@@ -900,6 +901,31 @@ def get_secret(name: str, default: str | None = None) -> str | None:
 
 
 def connect_to_mongo(collection_name, db_name: str | None = None):
+    # Special safety: disable live Mongo writes/reads for the legacy "Leaderboard" collection
+    # from inside Insurance_scorer unless explicitly re‑enabled via env.
+    if str(collection_name).lower() == "leaderboard" and str(
+        os.getenv("PLI_DISABLE_LEADERBOARD", "1")
+    ).lower() in ("1", "true", "yes"):
+
+        class _NullCollection:
+            """Minimal no-op collection stub for disabled Leaderboard writes."""
+
+            def __getattr__(self, name):
+                def _noop(*args, **kwargs):
+                    logging.info(
+                        "[Leaderboard-disabled] %s called on NullCollection; skipping.",
+                        name,
+                    )
+                    return None
+                return _noop
+        return _NullCollection()
+
+    try:
+        # Use centralized DB util which checks multiple env vars and raises error if missing
+        return get_db(default_db="PLI_Leaderboard_v2")[collection_name]
+    except Exception as e:
+        logging.error(f"Failed to connect to Mongo collection {collection_name}: {e}")
+        return None
     # Special safety: disable live Mongo writes/reads for the legacy "Leaderboard" collection
     # from inside Insurance_scorer unless explicitly re‑enabled via env.
     # This prevents stale/incorrect monthly aggregate data from being written or read.
