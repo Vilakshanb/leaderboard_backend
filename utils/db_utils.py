@@ -2,12 +2,19 @@ import os
 import pymongo
 import logging
 
+# Global cache for the MongoDB client to enable connection pooling across invocations
+_CLIENT_CACHE = None
+
 def get_db_client(**kwargs):
     """
     Returns a PyMongo client using the connection string from environment variables.
-    Checks multiple common key names. Raises generic Exception if missing to avoid localhost fallback.
-    Passes any additional kwargs to pymongo.MongoClient.
+    Uses a global cache to reuse the client across Azure Function invocations.
     """
+    global _CLIENT_CACHE
+
+    if _CLIENT_CACHE:
+        return _CLIENT_CACHE
+
     # List of keys to check in order
     keys = [
         "MongoDb-Connection-String",
@@ -31,7 +38,10 @@ def get_db_client(**kwargs):
         raise Exception(error_msg)
 
     try:
-        return pymongo.MongoClient(uri, **kwargs)
+        # Create new client and cache it
+        client = pymongo.MongoClient(uri, **kwargs)
+        _CLIENT_CACHE = client
+        return client
     except Exception as e:
         logging.critical(f"Failed to create MongoClient: {e}")
         raise
